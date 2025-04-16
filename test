@@ -1,9 +1,55 @@
-CREATE TABLE IF NOT EXISTS my_catalog.audit_schema.grant_audit_log (
-  timestamp TIMESTAMP,
-  schema STRING,
-  object_name STRING,
-  object_type STRING,       -- SCHEMA, TABLE, FUNCTION
-  privilege STRING,
-  grantee STRING,           -- user, group, or service principal name
-  grantee_type STRING       -- "user", "group", or "service_principal"
-)
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.getOrCreate()
+
+# === CONFIGURATION ===
+catalog_name = "your_catalog_name"
+service_principal = "your-service-principal@domain.com"
+audit_table = "my_catalog.grants_schema.service_principal_grants_log"
+
+# === GET SCHEMAS UNDER CATALOG ===
+schemas = spark.sql(f"SHOW SCHEMAS IN {catalog_name}").collect()
+
+for schema_row in schemas:
+    schema_name = schema_row["databaseName"]
+    fq_schema = f"{catalog_name}.{schema_name}"
+
+    # === SCHEMA GRANTS ===
+    grants = spark.sql(f"SHOW GRANTS ON SCHEMA {fq_schema}").collect()
+    for row in grants:
+        if row["principal"] == service_principal:
+            spark.sql(f"""
+                INSERT INTO {audit_table}
+                VALUES (
+                    current_timestamp(),
+                    '{catalog_name}',
+                    '{schema_name}',
+                    '{schema_name}',
+                    'SCHEMA',
+                    '{row["privilege"]}',
+                    '{service_principal}'
+                )
+            """)
+
+    # === OBJECT GRANTS (TABLES + VIEWS) ===
+    objects = spark.sql(f"SHOW TABLES IN {fq_schema}").collect()
+    for obj in objects:
+        object_name = obj["name"]
+        object_type = obj["tableType"]  # MANAGED / VIEW / etc.
+
+        object_fqn = f"{fq_schema}.{object_name}"
+        obj_grants = spark.sql(f"SHOW GRANTS ON TABLE {object_fqn}").collect()
+        for row in obj_grants:
+            if row["principal"] == service_principal:
+                spark.sql(f"""
+                    INSERT INTO {audit_table}
+                    VALUES (
+                        current_timestamp(),
+                        '{catalog_name}',
+                        '{schema_name}',
+                        '{object_name}',
+                        'TABLE',
+                        '{row["privilege"]}',
+                        '{service_principal}'
+                    )
+                """)
