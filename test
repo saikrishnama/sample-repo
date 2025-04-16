@@ -1,0 +1,32 @@
+CREATE CATALOG IF NOT EXISTS access_audit
+MANAGED LOCATION 's3://your-bucket-name/access_audit/';
+
+
+CREATE TABLE IF NOT EXISTS access_audit.grants_schema.service_principal_grants_log (
+  timestamp TIMESTAMP,
+  catalog STRING,
+  schema STRING,
+  object_name STRING,
+  object_type STRING,  -- SCHEMA, TABLE, FUNCTION, etc.
+  privilege STRING,
+  service_principal STRING
+);
+
+CREATE SCHEMA IF NOT EXISTS access_audit.grants_schema;
+
+
+CREATE TABLE IF NOT EXISTS access_audit.grants_schema.service_principal_grants_log (
+  timestamp TIMESTAMP,
+  catalog STRING,
+  schema STRING,
+  object_name STRING,
+  object_type STRING,  -- SCHEMA, TABLE, FUNCTION, etc.
+  privilege STRING,
+  service_principal STRING
+);
+
+
+INSERT INTO access_audit.grants_schema.service_principal_grants_log
+VALUES (current_timestamp(), 'test_catalog', 'test_schema', 'test_table', 'TABLE', 'SELECT', 'spn:test@example.com');
+
+SELECT * FROM access_audit.grants_schema.service_principal_grants_log;
