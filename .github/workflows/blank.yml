@@ -27,4 +27,4 @@ jobs:
 
       - name: pull requyest master
         run: |
-          echo "New changes"
+          yum update -y 
