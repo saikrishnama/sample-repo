@@ -5,6 +5,9 @@ name: CI
 # Controls when the workflow will run
 on:
   push:
+    branches:
+      - main
+      - 'releases/**'
 jobs:
   build:
     runs-on: ubuntu-latest
