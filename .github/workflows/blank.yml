@@ -20,3 +20,7 @@ jobs:
         run: | 
           echo Add other actions to build,
           echo test, and deploy your project.
+
+      - name: running from my brnach
+        run: |
+          echo "New changes"
