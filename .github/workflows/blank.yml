@@ -2,12 +2,7 @@
 
 name: CI
 
-# Controls when the workflow will run
 on:
-  # push:
-  #   branches:
-  #     - main
-  #     - 'releases/**'
   workflow_dispatch: 
 jobs:
   build:
@@ -25,5 +20,3 @@ jobs:
       - name: running from my brnach
         run: |
           echo "New changes"
-
-
