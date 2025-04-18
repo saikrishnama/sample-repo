@@ -19,6 +19,7 @@ jobs:
               run: |
                 echo "Print ${{env.Enable_Debug}}"
     job2-env-variables:
+        needs: [env-variables]
         runs-on: macos-latest
         env:
             DEBUG: false
