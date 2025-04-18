@@ -12,7 +12,11 @@ on:
         options:
           - dev
           - qa
-          - prod 
+          - prod
+      debug:
+        type: boolean
+        default: false
+        
   push:
     branches:
       - main
