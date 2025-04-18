@@ -1,7 +1,9 @@
 name: "env-variable"
-run-name: "saikrishna mandava"
+run-name: "mandava"
 on:
-    workflow_dispatch: 
+    push:
+        branches: 
+            - "*"
 jobs:
     env-variables:
         runs-on: ubuntu-22.04
@@ -16,3 +18,13 @@ jobs:
             - name: Printing the Env Variables from Top Level 
               run: |
                 echo "Print ${{env.Enable_Debug}}"
+    job2-env-variables:
+        runs-on: macos-latest
+        env:
+            DEBUG: false
+            Enable: True 
+        steps:
+            - name: running debug on mac os
+              run: |
+                echo "debug variable froms Job2"
+                echo "${{env.DEBUG}}, ${{env.Enable}}"
