@@ -29,3 +29,24 @@ jobs:
               run: |
                 echo "debug variable froms Job2"
                 echo "${{env.DEBUG}}, ${{env.Enable}}"
+
+    job2-env-variables:
+        needs: [env-variables]
+        runs-on: macos-latest
+        env:
+            DEBUG: false
+            Enable: True 
+        steps:
+            - name: running debug on mac os
+              run: |
+                echo "debug variable froms Job2"
+                echo "${{env.DEBUG}}, ${{env.Enable}}"
+    
+    checkout-source-code:
+        needs: [env-variables,job2-env-variables]
+        runs-on: ubuntu-22.04
+        steps:
+            - name: checkout source code from repo 
+              uses: actions/checkout@v4.2.2
+              with:
+                repository: 'demo-repo'
