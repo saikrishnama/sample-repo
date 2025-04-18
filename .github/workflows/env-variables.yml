@@ -37,4 +37,4 @@ jobs:
             - name: checkout source code from repo 
               uses: actions/checkout@v4.2.2
               with:
-                repository: 'demo-repo'
+                repository: 'saikrishnama/sample-repo'
