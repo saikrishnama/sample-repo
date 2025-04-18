@@ -4,6 +4,15 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      environemtn:
+        type: choice
+        default: ""
+        description: please select environemtn to deploy
+        options:
+          - dev
+          - qa
+          - prod 
   push:
     branches:
       - main
