@@ -37,7 +37,7 @@ jobs:
                 echo "${{env.DEBUG}}, ${{env.Enable}}, ${{env.Environment}}"
 
     Job3:
-        needs: [job2-env-variables,env-variables]
+        needs: [env-variables]
         runs-on: ubuntu-22.04
         steps:
             - name: dependes on job1 and 2
