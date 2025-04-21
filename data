@@ -1,0 +1,17 @@
+CREATE EXTERNAL TABLE s3_inventory (
+  bucket_name string,
+  key string,
+  size bigint,
+  last_modified_date string,
+  storage_class string,
+  etag string,
+  is_multipart_uploaded string,
+  replication_status string
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe'
+WITH SERDEPROPERTIES (
+  'serialization.format' = ',',
+  'field.delim' = ','
+)
+LOCATION 's3://your-inventory-bucket/path-to-inventory-folder/'
+TBLPROPERTIES ('skip.header.line.count'='1');
