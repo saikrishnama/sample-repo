@@ -34,9 +34,10 @@ jobs:
           uses: actions/download-artifact@v4
           with:
             name: app-artifacts
-            
+
         - name: List files from Job2
           run: |
+            pwd
             ls -ltra
 
 
