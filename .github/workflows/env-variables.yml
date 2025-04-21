@@ -2,7 +2,10 @@ name: "env-variable"
 run-name: "mandava"
 on:
   workflow_dispatch: {}
-
+env:
+  Enable_Debug: warn
+  ACTION: example
+  Environment: Sample-test
 jobs:
     env-variables:
         runs-on: ubuntu-22.04
