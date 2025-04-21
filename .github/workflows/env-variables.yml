@@ -24,9 +24,9 @@ jobs:
                 Enable_Debug: false
             - name: print secret variables
               run: |
-                echo "Print ${{secrets.DEVAPKEY}}"
+                echo "Print $DEVAPKEY"
               env:
-                Enable_Debug: false
+                DEVAPKEY: ${{ secrets.DEVAPKEY }}
     # job2-env-variables:
     #     needs: env-variables
     #     runs-on: macos-latest
