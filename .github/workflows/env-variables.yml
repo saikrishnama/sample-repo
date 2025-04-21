@@ -17,6 +17,8 @@ jobs:
             - name: Printing the Env Variables from Top Level 
               run: |
                 echo "Print ${{env.Enable_Debug}}"
+              env:
+                Enable_Debug: false
     # job2-env-variables:
     #     needs: [env-variables]
     #     runs-on: macos-latest
