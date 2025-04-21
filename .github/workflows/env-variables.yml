@@ -33,7 +33,7 @@ jobs:
             - name: running debug on mac os
               run: |
                 echo "debug variable froms Job2"
-                echo "${{env.DEBUG}}, ${{env.Enable}}"
+                echo "${{env.DEBUG}}, ${{env.Enable}}, ${{env.Environment}}"
 
     # checkout-source-code:
     #     needs: [env-variables,job2-env-variables]
