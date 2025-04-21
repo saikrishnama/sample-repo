@@ -37,7 +37,7 @@ jobs:
         run: ls -ltr
       - name: create directory and move files
         run: |-
-             mkdir -R workspace/repo
+             mkdir  workspace/repo
              mv * workspace/repo/
       
       - name: Upload artifacts
