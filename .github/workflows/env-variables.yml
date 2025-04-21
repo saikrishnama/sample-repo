@@ -28,6 +28,7 @@ jobs:
         env:
             DEBUG: false
             Enable: True 
+            Environment: dummy-env
         steps:
             - name: running debug on mac os
               run: |
