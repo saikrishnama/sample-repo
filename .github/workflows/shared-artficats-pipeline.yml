@@ -12,6 +12,14 @@ jobs:
             - name: List code repo files
               run: |
                 ls -ltr 
+    Job2:
+      name: Access check-out-stage  files
+      runs-on: ubuntu-22.04
+      needs: [check-out-stage]
+      steps:
+        - name: List files from Job2
+          run: |
+            ls -ltra
 
 
 #   Upload-Artifacts:
