@@ -1,9 +1,10 @@
 name: "env-variable"
 run-name: "mandava"
 on:
-    push:
-        branches: 
-            - "*"
+  workflow_dispatch: {}
+    # push:
+    #     branches: 
+    #         - "*"
 jobs:
     env-variables:
         runs-on: ubuntu-22.04
