@@ -24,7 +24,7 @@ jobs:
                 Enable_Debug: false
             - name: print secret variables
               run: |
-                echo "Print ${{secrets.dev.DEVAPKEY}}"
+                echo "Print ${{secrets.DEVAPKEY}}"
               env:
                 Enable_Debug: false
     # job2-env-variables:
