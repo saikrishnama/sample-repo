@@ -2,7 +2,7 @@ name: Share data between jobs
 on:
     workflow_dispatch: {}
     schedule:
-      - cron:  '1 * * * *'
+      - cron: '*/1 * * * *'
 jobs:
     check-out-stage:
         name: check-out-stage
