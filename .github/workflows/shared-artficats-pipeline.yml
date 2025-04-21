@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "Hello World" > file.txt
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v4
         with:
           name: file
           path: file.txt
@@ -41,7 +41,7 @@ jobs:
 #              mv * workspace/repo/
       
 #       - name: Upload artifacts
-#         uses: actions/upload-artifact@v2
+#         uses: actions/upload-artifact@v4
 #         with:
 #             name: multiple-files
 #             path: workspace/repo/
