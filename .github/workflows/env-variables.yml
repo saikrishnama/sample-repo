@@ -16,6 +16,8 @@ jobs:
             - name: adding env variable pipeline
               run: |
                 echo "test env variable pipeline"
+                echo "list files"
+                ls -ltr 
 
             - name: Printing the Env Variables from Top Level 
               run: |
