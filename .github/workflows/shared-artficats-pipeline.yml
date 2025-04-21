@@ -15,8 +15,8 @@ jobs:
             
             - name: create folder
               run: |
-                mkdir -p workspace/code
-                cp -rvf * workspace/code/
+                mkdir -p temp/code
+                cp -rvf * temp/code/
             
             - name: Upload artifacts
               uses: actions/upload-artifact@v4
