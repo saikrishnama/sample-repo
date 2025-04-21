@@ -14,46 +14,46 @@ jobs:
           name: file
           path: file.txt
 
-#   Download-Artifacts:
-#     name: Download File
-#     runs-on: ubuntu-latest
-#     needs: Upload-Artifacts
-#     steps:
-#       - uses: actions/download-artifact@v4
-#         with:
-#           name: file
-#       - name: Print Download file
-#         run: cat file.txt
+  Download-Artifacts:
+    name: Download File
+    runs-on: ubuntu-latest
+    needs: Upload-Artifacts
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: file
+      - name: Print Download file
+        run: cat file.txt
 
-#   Upload-Multiple-Artifacts:
-#     name: multiple artifacts upload
-#     runs-on: ubuntu-22.04
-#     steps:
-#       - uses: actions/checkout@v4
-#         with:
-#             fetch-depth: 0
+  Upload-Multiple-Artifacts:
+    name: multiple artifacts upload
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+            fetch-depth: 0
       
-#       - name: run list files condition
-#         run: ls -ltr
-#       - name: create directory and move files
-#         run: |-
-#              mkdir -R workspace/repo
-#              mv * workspace/repo/
+      - name: run list files condition
+        run: ls -ltr
+      - name: create directory and move files
+        run: |-
+             mkdir -R workspace/repo
+             mv * workspace/repo/
       
-#       - name: Upload artifacts
-#         uses: actions/upload-artifact@v4
-#         with:
-#             name: multiple-files
-#             path: workspace/repo/
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+            name: multiple-files
+            path: workspace/repo/
 
-#   Download-Multi-ple-Artifacts:
-#     name: Download File
-#     runs-on: ubuntu-latest
-#     needs: [Upload-Multiple-Artifacts]
-#     steps:
-#       - uses: actions/download-artifact@v4
-#         with:
-#           name: multiple-files
-#       - name: Print Download file
-#         run: |
-#             ls -ltr 
+  Download-Multi-ple-Artifacts:
+    name: Download File
+    runs-on: ubuntu-latest
+    needs: [Upload-Multiple-Artifacts]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: multiple-files
+      - name: Print Download file
+        run: |
+            ls -ltr 
