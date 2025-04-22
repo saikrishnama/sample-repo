@@ -1,0 +1,15 @@
+from pyspark.sql.types import StructType, StructField, StringType
+
+# Define explicit schema
+schema = StructType([
+    StructField("catalog_name", StringType(), True),
+    StructField("schema_name", StringType(), True),
+    StructField("table_name", StringType(), True),
+    StructField("access_group", StringType(), True),
+    StructField("privilege_type", StringType(), True),
+    StructField("table_type", StringType(), True),
+    StructField("access_level", StringType(), True),
+])
+
+# Now create the DataFrame with the schema
+current_df = spark.createDataFrame(permissions_data, schema=schema)
