@@ -1,17 +1,57 @@
-CREATE EXTERNAL TABLE s3_inventory (
-  bucket_name string,
-  key string,
-  size bigint,
-  last_modified_date string,
-  storage_class string,
-  etag string,
-  is_multipart_uploaded string,
-  replication_status string
-)
-ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe'
-WITH SERDEPROPERTIES (
-  'serialization.format' = ',',
-  'field.delim' = ','
-)
-LOCATION 's3://your-inventory-bucket/path-to-inventory-folder/'
-TBLPROPERTIES ('skip.header.line.count'='1');
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import lit
+from datetime import datetime
+
+spark = SparkSession.builder.getOrCreate()
+
+# === CONFIGURATION ===
+CATALOG_TO_MONITOR = "prod"
+PERMISSION_TABLE = "grant.audit.access_report"
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+# === COLLECT PERMISSIONS ===
+schemas = [row.databaseName for row in spark.sql(f"SHOW SCHEMAS IN {CATALOG_TO_MONITOR}").collect()]
+permissions_data = []
+
+for schema in schemas:
+    tables = spark.sql(f"SHOW TABLES IN {CATALOG_TO_MONITOR}.{schema}").collect()
+    for table in tables:
+        table_type = table.tableType
+        table_name = table.tableName
+        full_table_name = f"{CATALOG_TO_MONITOR}.{schema}.{table_name}"
+
+        try:
+            grants = spark.sql(f"SHOW GRANTS ON TABLE {full_table_name}").collect()
+        except:
+            continue
+
+        for grant in grants:
+            permissions_data.append((
+                CATALOG_TO_MONITOR,
+                schema,
+                table_name,
+                table_type,
+                grant.actionType,
+                grant.principal
+            ))
+
+columns = ["catalog_name", "schema_name", "table_name", "table_type", "privilege_type", "access_group"]
+current_df = spark.createDataFrame(permissions_data, columns)
+
+# === LOAD EXISTING PERMISSION SNAPSHOT ===
+if spark._jsparkSession.catalog().tableExists(PERMISSION_TABLE):
+    existing_df = spark.table(PERMISSION_TABLE).select(columns)  # exclude updated_at for diff
+else:
+    existing_df = spark.createDataFrame([], current_df.schema)
+
+# === FIND NEW PERMISSIONS ===
+new_entries_df = current_df.subtract(existing_df)
+
+# === APPEND ONLY NEW ENTRIES WITH TIMESTAMP ===
+if new_entries_df.count() > 0:
+    timestamp = datetime.utcnow().strftime(TIMESTAMP_FORMAT)
+    new_entries_df = new_entries_df.withColumn("updated_at", lit(timestamp))
+    new_entries_df.write.mode("append").saveAsTable(PERMISSION_TABLE)
+    print(f"[{timestamp}] Appended {new_entries_df.count()} new permission entries.")
+else:
+    print("No new permission entries found.")
