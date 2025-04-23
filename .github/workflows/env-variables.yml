@@ -6,6 +6,8 @@ on:
       - '*'
     paths:
       - 'flask-app/*'
+      - '**.py'
+      - '**.sh'
 
 env:
   Enable_Debug: warn
