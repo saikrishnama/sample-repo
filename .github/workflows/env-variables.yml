@@ -25,10 +25,10 @@ jobs:
               env:
                 Enable_Debug: false
             - name: print secret variables
+              environment: dev
               run: |
-                echo "Print $DEVAPKEY"
-              env:
-                DEVAPKEY: ${{ secrets.DEVAPKEY }}
+                echo "Print ${{ secrets.DEV_DOCKER_USERNAME }}"
+              
     # job2-env-variables:
     #     needs: env-variables
     #     runs-on: macos-latest
