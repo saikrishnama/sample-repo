@@ -9,6 +9,7 @@ env:
 jobs:
     env-variables:
         runs-on: ubuntu-22.04
+        environment: dev  
         env:
             Enable_Debug: True
             ACTION: TEST
@@ -25,7 +26,6 @@ jobs:
               env:
                 Enable_Debug: false
             - name: print secret variables
-              environment: dev
               run: |
                 echo "Print ${{ secrets.DEV_DOCKER_USERNAME }}"
               
