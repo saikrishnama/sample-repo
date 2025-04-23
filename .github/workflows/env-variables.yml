@@ -1,7 +1,12 @@
 name: "env-variable"
 run-name: "mandava"
 on:
-  workflow_dispatch: {}
+  push:
+    branches:
+      - '*'
+    paths:
+      - 'flask-app/*'
+
 env:
   Enable_Debug: warn
   ACTION: example
