@@ -1,0 +1,114 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType
+from pyspark.sql.functions import lit, to_timestamp, upper, trim
+from datetime import datetime
+from pyspark.sql.utils import AnalysisException
+
+spark = SparkSession.builder.getOrCreate()
+
+# === CONFIG ===
+CATALOG_TO_MONITOR = "prod"
+PERMISSION_TABLE = "grant.audit.access_report"
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+# === SCHEMA ===
+schema = StructType([
+    StructField("catalog_name", StringType(), True),
+    StructField("schema_name", StringType(), True),
+    StructField("table_name", StringType(), True),
+    StructField("access_group", StringType(), True),
+    StructField("privilege_type", StringType(), True),
+    StructField("table_type", StringType(), True),
+    StructField("access_level", StringType(), True),
+])
+
+# === FILTER SCHEMAS ===
+schemas = [
+    row.databaseName for row in spark.sql(f"SHOW SCHEMAS IN {CATALOG_TO_MONITOR}").collect()
+    if row.databaseName.lower() != "information_schema"
+]
+
+permissions_data = []
+
+for schema_name in schemas:
+    tables = spark.sql(f"SHOW TABLES IN {CATALOG_TO_MONITOR}.{schema_name}").collect()
+    for table in tables:
+        table_name = table.tableName
+        full_table_name = f"{CATALOG_TO_MONITOR}.{schema_name}.{table_name}"
+
+        try:
+            table_info = spark.sql(f"DESCRIBE FORMATTED {full_table_name}").collect()
+            table_type = "UNKNOWN"
+            for row in table_info:
+                if row.col_name.strip().lower() == "type":
+                    table_type = row.data_type.strip()
+                    break
+        except:
+            continue
+
+        try:
+            grants = spark.sql(f"SHOW GRANTS ON TABLE {full_table_name}").collect()
+        except:
+            continue
+
+        for grant in grants:
+            permissions_data.append((
+                CATALOG_TO_MONITOR,
+                schema_name,
+                table_name,
+                grant["Principal"],
+                grant["ActionType"],
+                table_type,
+                grant["ObjectKey"]
+            ))
+
+# === CURRENT SNAPSHOT DATAFRAME ===
+current_df = spark.createDataFrame(permissions_data, schema=schema)
+
+# === Add timestamp and status to current snapshot ===
+timestamp = datetime.utcnow().strftime(TIMESTAMP_FORMAT)
+current_with_status = current_df.withColumn("updated_at", to_timestamp(lit(timestamp))) \
+                                .withColumn("status", lit("active"))
+
+# === Load previous state from the access_report table ===
+try:
+    previous_df = spark.table(PERMISSION_TABLE).filter("status = 'active'")
+except AnalysisException:
+    # Table doesn't exist, create and write fresh
+    current_with_status.write.format("delta").mode("overwrite").saveAsTable(PERMISSION_TABLE)
+    print(f"✅ Created audit table with initial snapshot.")
+    exit()
+
+# === Normalize for comparison ===
+def normalize(df):
+    return df.select(
+        trim(upper(df.catalog_name)).alias("catalog_name"),
+        trim(upper(df.schema_name)).alias("schema_name"),
+        trim(upper(df.table_name)).alias("table_name"),
+        trim(upper(df.access_group)).alias("access_group"),
+        trim(upper(df.privilege_type)).alias("privilege_type"),
+        trim(upper(df.table_type)).alias("table_type"),
+        trim(upper(df.access_level)).alias("access_level")
+    )
+
+normalized_current = normalize(current_with_status)
+normalized_previous = normalize(previous_df)
+
+# === Detect newly added or changed permissions ===
+added_permissions = normalized_current.subtract(normalized_previous)
+removed_permissions = normalized_previous.subtract(normalized_current)
+
+# === Build final DataFrame for inserts ===
+new_rows = added_permissions.withColumn("updated_at", to_timestamp(lit(timestamp))) \
+                            .withColumn("status", lit("active"))
+
+revoked_rows = removed_permissions.withColumn("updated_at", to_timestamp(lit(timestamp))) \
+                                  .withColumn("status", lit("revoked"))
+
+# === Append both if changes detected ===
+if new_rows.count() > 0 or revoked_rows.count() > 0:
+    final_changes = new_rows.union(revoked_rows)
+    final_changes.write.format("delta").mode("append").saveAsTable(PERMISSION_TABLE)
+    print(f"✅ Tracked {new_rows.count()} new + {revoked_rows.count()} revoked permissions at {timestamp}")
+else:
+    print("ℹ️ No permission changes detected.")
