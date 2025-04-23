@@ -1,0 +1,101 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType
+from pyspark.sql.functions import lit, to_timestamp
+from datetime import datetime
+from pyspark.sql.utils import AnalysisException
+
+# === CONFIG ===
+spark = SparkSession.builder.getOrCreate()
+CATALOG_TO_MONITOR = "prod"
+PERMISSION_TABLE = "grant.audit.access_report"
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+# === SCHEMA DEFINITION ===
+schema = StructType([
+    StructField("catalog_name", StringType(), True),
+    StructField("schema_name", StringType(), True),
+    StructField("table_name", StringType(), True),
+    StructField("access_group", StringType(), True),
+    StructField("privilege_type", StringType(), True),
+    StructField("table_type", StringType(), True),
+    StructField("access_level", StringType(), True),
+])
+
+# === COLLECT CURRENT PERMISSIONS ===
+schemas = [row.databaseName for row in spark.sql(f"SHOW SCHEMAS IN {CATALOG_TO_MONITOR}").collect()]
+permissions_data = []
+
+for schema_name in schemas:
+    tables = spark.sql(f"SHOW TABLES IN {CATALOG_TO_MONITOR}.{schema_name}").collect()
+
+    for table in tables:
+        table_name = table.tableName
+        full_table_name = f"{CATALOG_TO_MONITOR}.{schema_name}.{table_name}"
+
+        # Get table_type from DESCRIBE FORMATTED
+        try:
+            table_info = spark.sql(f"DESCRIBE FORMATTED {full_table_name}").collect()
+            table_type = "UNKNOWN"
+            for row in table_info:
+                if row.col_name.strip().lower() == "type":
+                    table_type = row.data_type.strip()
+                    break
+        except:
+            continue
+
+        # Get grants
+        try:
+            grants = spark.sql(f"SHOW GRANTS ON TABLE {full_table_name}").collect()
+        except:
+            continue
+
+        for grant in grants:
+            permissions_data.append((
+                CATALOG_TO_MONITOR,
+                schema_name,
+                table_name,
+                grant["Principal"],
+                grant["ActionType"],
+                table_type,
+                grant["ObjectKey"]
+            ))
+
+# Create DataFrame with explicit schema
+current_df = spark.createDataFrame(permissions_data, schema=schema)
+
+# === HANDLE FIRST RUN (TABLE CREATION) ===
+try:
+    existing_df = spark.table(PERMISSION_TABLE)
+except AnalysisException:
+    # Table doesn't exist yet, create it
+    timestamp = datetime.utcnow().strftime(TIMESTAMP_FORMAT)
+    current_df = current_df.withColumn("updated_at", to_timestamp(lit(timestamp)))
+    current_df.write.format("delta").mode("overwrite").saveAsTable(PERMISSION_TABLE)
+    print(f"✅ Created permission tracking table: {PERMISSION_TABLE}")
+    exit()
+
+# === COMPARE & DETECT CHANGES ===
+compare_cols = ["catalog_name", "schema_name", "table_name", "access_group", "privilege_type", "table_type", "access_level"]
+existing_clean = existing_df.select(compare_cols)
+new_clean = current_df.select(compare_cols)
+
+# Subtract to find new/changed permissions
+new_changes_df = new_clean.subtract(existing_clean)
+
+if new_changes_df.count() > 0:
+    timestamp = datetime.utcnow().strftime(TIMESTAMP_FORMAT)
+    changes_with_ts = new_changes_df.withColumn("updated_at", to_timestamp(lit(timestamp)))
+
+    # Ensure column order matches the existing table
+    ordered_columns = compare_cols + ["updated_at"]
+    changes_with_ts = changes_with_ts.select(ordered_columns)
+
+    # Append new permission records
+    changes_with_ts.write \
+        .format("delta") \
+        .mode("append") \
+        .saveAsTable(PERMISSION_TABLE)
+
+    print(f"✅ {new_changes_df.count()} permission changes recorded at {timestamp}")
+else:
+    print("ℹ️ No permission changes detected.")

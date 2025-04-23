@@ -1,0 +1,11 @@
+CREATE TABLE grant.audit.access_report (
+    catalog_name    STRING,
+    schema_name     STRING,
+    table_name      STRING,
+    access_group    STRING,
+    privilege_type  STRING,
+    table_type      STRING,
+    access_level    STRING,
+    updated_at      TIMESTAMP
+)
+USING DELTA;
