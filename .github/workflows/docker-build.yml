@@ -35,4 +35,4 @@ jobs:
        with:
          context: .
          push: true
-         tags: saikrishnama/app:latest
+         tags: ghcr.io/saikrishnama/app:latest
