@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-        # Checkout the code
       - 
         name: Checkout code
         uses: actions/checkout@v4
@@ -29,13 +28,12 @@ jobs:
         name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-            registry: ghcr.io
-            username: ${{ github.actor }}
-            password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       -       
        name: Build and push
        uses: docker/build-push-action@v6
        with:
          context: .
          push: true
-         tags: ghcr.io/saikrishnama/app:latest
+         tags: sadmin123/localdemo:v1
