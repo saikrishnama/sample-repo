@@ -30,4 +30,4 @@ jobs:
        with:
          context: .
          push: true
-         tags: sadmin123/localdemo:v1
+         tags: sadmin123/localdemo:${{ github.sha }}
