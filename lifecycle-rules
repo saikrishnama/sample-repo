@@ -1,0 +1,32 @@
+{
+  "Rules": [
+    {
+      "ID": "DeleteOldVersions",
+      "Prefix": "my/folder/",
+      "Status": "Enabled",
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 30
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 7
+      }
+    },
+    {
+      "ID": "DeleteMarkers",
+      "Prefix": "my/folder/",
+      "Status": "Enabled",
+      "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+      }
+    }
+  ]
+}
+
+
+
+aws s3api put-bucket-lifecycle-configuration \
+  --bucket your-bucket-name \
+  --lifecycle-configuration file://lifecycle.json
+
+
+aws s3api get-bucket-lifecycle-configuration --bucket your-bucket-name
