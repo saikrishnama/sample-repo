@@ -1,0 +1,60 @@
+flowchart TD
+  %% GitLab Repos
+  subgraph GitLab Repos 
+    A2[Repo: u-dev]:::repo
+    A3[Repo: u-poc]:::repo
+    A4[Repo: u-qa]:::repo
+    A5[Repo: u-int]:::repo
+    A6[Repo: u-prod]:::repo
+    A7[Repo: u-stage]:::repo
+    A8[Repo: u-red]:::repo
+  end
+
+  %% Flux Components
+  subgraph Flux Components
+    B1[Source Controller]:::flux
+    B3[Kustomize Controller]:::flux
+  end
+
+  %% Clusters
+  subgraph Clusters
+    subgraph Dev Cluster
+      D1[u-dev]:::dev
+      D2[u-poc]:::dev
+    end
+    subgraph QA Cluster
+      Q1[u-qa]:::qa
+      Q2[u-int]:::qa
+    end
+    subgraph Prod Cluster
+      P1[u-prod]:::prod
+      P2[u-red]:::prod
+      P3[u-stage]:::prod
+    end
+  end
+
+  %% Connections
+  A2 --> B1
+  A3 --> B1
+  A4 --> B1
+  A5 --> B1
+  A6 --> B1
+  A7 --> B1
+  A8 --> B1
+
+  B1 --> B3
+
+  B3 --> D1
+  B3 --> D2
+  B3 --> Q1
+  B3 --> Q2
+  B3 --> P1
+  B3 --> P2
+  B3 --> P3
+
+  %% Styles
+  classDef repo fill:#ffe0b2,stroke:#e65100,stroke-width:2px;
+  classDef flux fill:#bbdefb,stroke:#0d47a1,stroke-width:2px;
+  classDef dev fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px;
+  classDef qa fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
+  classDef prod fill:#ffcdd2,stroke:#c62828,stroke-width:2px;
