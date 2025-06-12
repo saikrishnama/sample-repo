@@ -1,0 +1,63 @@
+flowchart TD
+
+  %% GitLab Repositories
+  subgraph  GitLab
+    direction TB
+    A1[📦 Repo: shared-secrets]:::repo
+    A2[📦 Repo: microservices]:::repo
+  end
+
+  %% Flux GitOps
+  subgraph  Flux GitOps
+    direction TB
+
+    B1[📥 Source Controller]:::flux
+    B3[🧱 Kustomize Controller<br><sub>Applies HelmRepo, HelmRelease, Secrets</sub>]:::flux
+
+    subgraph B2_sub[⚙️ Helm Controller]
+      HR1[📄 HelmRepository]:::helmres
+      HR2[📦 HelmRelease]:::helmres
+      HR3[🔐 Secrets]:::helmres
+    end
+  end
+
+  %% Kubernetes Clusters
+  subgraph  Dev Cluster
+    direction TB
+    D1[u-dev]:::dev
+    D2[u-poc]:::dev
+  end
+
+  subgraph  QA Cluster
+    direction TB
+    Q1[u-qa]:::qa
+    Q2[u-int]:::qa
+  end
+
+  subgraph  Prod Cluster
+    direction TB
+    P1[u-prod]:::prod
+    P2[u-red]:::prod
+    P3[u-stage]:::prod
+  end
+
+  %% Flow Connections
+  A1 --> B1
+  A2 --> B1
+  B1 --> B3
+  B3 --> HR1
+  B3 --> HR2
+  B3 --> HR3
+  HR2 --> D1
+  HR2 --> D2
+  HR2 --> Q1
+  HR2 --> Q2
+  HR2 --> P1
+  HR2 --> P2
+  HR2 --> P3
+
+  %% Styling Classes
+  classDef repo fill:#ffe0b2,stroke:#e65100,stroke-width:2px,font-weight:bold;
+  classDef flux fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,font-weight:bold;
+  classDef helmres fill:#d1c4e9,stroke:#512da8,stroke-width:2px,font-weight:bold;
+  classDef dev fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,font-w
