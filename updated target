@@ -1,0 +1,66 @@
+flowchart TD
+
+  %% GitLab Repositories
+  subgraph  GitLab
+    direction TB
+    git_secrets[📦 Repo: shared-secrets]:::repo
+    git_services[📦 Repo: microservices]:::repo
+  end
+
+  %% Flux GitOps
+  subgraph  Flux GitOps
+    direction TB
+
+    source_controller[📥 Source Controller]:::flux
+    kustomize_controller[🧱 Kustomize Controller<br><sub>Applies HelmRepo, HelmRelease, Secrets</sub>]:::flux
+
+    subgraph helm_ctrl[⚙️ Helm Controller]
+      helm_repo_node[📄 HelmRepository]:::helmres
+      helm_release_node[📦 HelmRelease]:::helmres
+      helm_secrets_node[🔐 Secrets]:::helmres
+    end
+  end
+
+  %% Kubernetes Clusters
+  subgraph  Dev Cluster
+    direction TB
+    dev_u_dev[u-dev]:::dev
+    dev_u_poc[u-poc]:::dev
+  end
+
+  subgraph  QA Cluster
+    direction TB
+    qa_u_qa[u-qa]:::qa
+    qa_u_int[u-int]:::qa
+  end
+
+  subgraph  Production Cluster
+    direction TB
+    prod_u_prod[u-prod]:::prod
+    prod_u_red[u-red]:::prod
+    prod_u_stage[u-stage]:::prod
+  end
+
+  %% Flow Connections
+  git_secrets --> source_controller
+  git_services --> source_controller
+  source_controller --> kustomize_controller
+  kustomize_controller --> helm_repo_node
+  kustomize_controller --> helm_release_node
+  kustomize_controller --> helm_secrets_node
+
+  helm_release_node --> dev_u_dev
+  helm_release_node --> dev_u_poc
+  helm_release_node --> qa_u_qa
+  helm_release_node --> qa_u_int
+  helm_release_node --> prod_u_prod
+  helm_release_node --> prod_u_red
+  helm_release_node --> prod_u_stage
+
+  %% Styling Classes
+  classDef repo fill:#ffe0b2,stroke:#e65100,stroke-width:2px,font-weight:bold;
+  classDef flux fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,font-weight:bold;
+  classDef helmres fill:#d1c4e9,stroke:#512da8,stroke-width:2px,font-weight:bold;
+  classDef dev fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,font-weight:bold;
+  classDef qa fill:#fff9c4,stroke:#fbc02d,stroke-width:2px,font-weight:bold;
+  classDef prod fill:#ffcdd2,stroke:#c62828,stroke-width:2px,font-weight:bold;
