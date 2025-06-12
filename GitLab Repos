@@ -1,0 +1,63 @@
+flowchart TD
+  %% GitLab Repos
+  subgraph GitLab Repos 
+    direction TB
+    A2[[📦 Repo: u-dev]]:::repo
+    A3[[📦 Repo: u-poc]]:::repo
+    A4[[📦 Repo: u-qa]]:::repo
+    A5[[📦 Repo: u-int]]:::repo
+    A6[[📦 Repo: u-prod]]:::repo
+    A7[[📦 Repo: u-stage]]:::repo
+    A8[[📦 Repo: u-red]]:::repo
+  end
+
+  %% Kustomize CD
+  B3[[ Kustomize ]]:::flux
+
+  %% Kubernetes Clusters
+  subgraph Kubernetes Clusters
+    direction TB
+
+    subgraph Dev Cluster [Dev Cluster ]
+      direction LR
+      D1[u-dev]:::dev
+      D2[u-poc]:::dev
+    end
+
+    subgraph QA Cluster [QA Cluster]
+      direction LR
+      Q1[u-qa]:::qa
+      Q2[u-int]:::qa
+    end
+
+    subgraph Prod Cluster [Prod Cluster ]
+      direction LR
+      P1[u-prod]:::prod
+      P2[u-red]:::prod
+      P3[u-stage]:::prod
+    end
+  end
+
+  %% Connections
+  A2 --> B3
+  A3 --> B3
+  A4 --> B3
+  A5 --> B3
+  A6 --> B3
+  A7 --> B3
+  A8 --> B3
+
+  B3 --> D1
+  B3 --> D2
+  B3 --> Q1
+  B3 --> Q2
+  B3 --> P1
+  B3 --> P2
+  B3 --> P3
+
+  %% Styles
+  classDef repo fill:#b2d1ff,stroke:#e65100,stroke-width:4px,font-weight:bold;
+  classDef flux fill:#f8ffb2,stroke:#0d47a1,stroke-width:4px,font-weight:bold;
+  classDef dev fill:#c8e6c9,stroke:#2e7d32,stroke-width:4px,font-weight:bold;
+  classDef qa fill:#fff9c4,stroke:#fbc02d,stroke-width:4px,font-weight:bold;
+  classDef prod fill:#ffcdd2,stroke:#c62828,stroke-width:4px,font-weight:bold;
