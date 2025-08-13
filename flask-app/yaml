@@ -1,0 +1,17 @@
+Service Principal Name:
+  - spn-data-apple
+  - spn-data-orange
+
+Access_type:
+  use-Catalog:
+    - demo
+    - dev
+  Schema:
+    - salesforce
+    - marketing
+  Select-access-tables:
+    - metrics
+    - finance.transactions
+  read-write:
+    - apples_metrics
+    - marketing.campaigns
