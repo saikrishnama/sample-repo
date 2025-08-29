@@ -15,8 +15,7 @@ def run_sql(sql: str, dry_run: bool):
         print(f"[DRY RUN] {sql}")
     else:
         print(f"[EXECUTING] {sql}")
-        # In Databricks replace with:
-        # spark.sql(sql)
+        # Replace with: spark.sql(sql) in Databricks
 
 def principals_from_config(cfg: Dict[str, Any]) -> List[str]:
     return list(cfg.get("SP", [])) + list(cfg.get("GROUPS", []))
@@ -40,14 +39,11 @@ def list_yaml_files(folder: str) -> List[str]:
 # Core grant emission
 # ---------------------------
 def grant_catalog_basic(cfg: Dict[str, Any], dry: bool):
-    """Backward-compat: USE_CATALOG: [cat1, cat2] -> grant USE CATALOG to SP/GROUPS."""
     for catalog in norm_list(cfg.get("USE_CATALOG", [])):
         for p in principals_from_config(cfg):
             run_sql(f"GRANT USE CATALOG ON CATALOG {catalog} TO `{p}`", dry)
 
 def grant_schema_basic(cfg: Dict[str, Any], dry: bool):
-    """Backward-compat: USE_SCHEMA: [schema, ...] -> grant USE SCHEMA to SP/GROUPS.
-       Accepts either 'catalog.schema' or plain 'schema' (paired with USE_CATALOG)."""
     cats = norm_list(cfg.get("USE_CATALOG", []))
     for schema in norm_list(cfg.get("USE_SCHEMA", [])):
         if "." in schema:
@@ -55,21 +51,13 @@ def grant_schema_basic(cfg: Dict[str, Any], dry: bool):
             for p in principals_from_config(cfg):
                 run_sql(f"GRANT USE SCHEMA ON SCHEMA {cat}.{sch} TO `{p}`", dry)
         else:
-            # Pair each USE_SCHEMA with all USE_CATALOG entries
             for cat in cats:
                 for p in principals_from_config(cfg):
                     run_sql(f"GRANT USE SCHEMA ON SCHEMA {cat}.{schema} TO `{p}`", dry)
 
 def grant_catalog_advanced(cfg: Dict[str, Any], dry: bool):
-    """
-    Advanced: CATALOG_GRANTS:
-      - catalog: production
-        privilege: ALL PRIVILEGES   # default 'USE CATALOG'
-        principals: [dbk-workflow, data_engineers]  # default SP+GROUPS
-    """
     for entry in norm_list(cfg.get("CATALOG_GRANTS", [])):
         if isinstance(entry, str):
-            # shorthand -> act like USE CATALOG to SP/GROUPS
             for p in principals_from_config(cfg):
                 run_sql(f"GRANT USE CATALOG ON CATALOG {entry} TO `{p}`", dry)
         elif isinstance(entry, dict):
@@ -80,17 +68,9 @@ def grant_catalog_advanced(cfg: Dict[str, Any], dry: bool):
                 run_sql(f"GRANT {priv} ON CATALOG {catalog} TO `{p}`", dry)
 
 def grant_schema_advanced(cfg: Dict[str, Any], dry: bool):
-    """
-    Advanced: SCHEMA_GRANTS:
-      - schema: production.analytics
-        privilege: ALL PRIVILEGES   # default 'USE SCHEMA'
-        principals: [analyst_group]
-    """
     for entry in norm_list(cfg.get("SCHEMA_GRANTS", [])):
         if isinstance(entry, str):
-            # shorthand -> act like USE SCHEMA to SP/GROUPS
             if "." not in entry:
-                # If only schema provided, pair with each USE_CATALOG
                 for cat in norm_list(cfg.get("USE_CATALOG", [])):
                     for p in principals_from_config(cfg):
                         run_sql(f"GRANT USE SCHEMA ON SCHEMA {cat}.{entry} TO `{p}`", dry)
@@ -101,7 +81,6 @@ def grant_schema_advanced(cfg: Dict[str, Any], dry: bool):
         elif isinstance(entry, dict):
             schema = entry["schema"]
             if "." not in schema:
-                # Pair with each USE_CATALOG when only schema given
                 for cat in norm_list(cfg.get("USE_CATALOG", [])):
                     priv = entry.get("privilege", "USE SCHEMA")
                     principals = entry.get("principals", principals_from_config(cfg))
@@ -114,27 +93,32 @@ def grant_schema_advanced(cfg: Dict[str, Any], dry: bool):
                 for p in principals:
                     run_sql(f"GRANT {priv} ON SCHEMA {cat}.{sch} TO `{p}`", dry)
 
+# ---------------------------
+# Fixed Role Grants
+# ---------------------------
 def grant_role_mapped(cfg: Dict[str, Any], dry: bool):
     """
-    Roles where entries look like:
-      - 'catalog.schema.principal'  (schema-level grant)
-      - 'catalog.schema'            (schema-level grant to SP/GROUPS)
-      - 'principal'                 (catalog-level grant for every USE_CATALOG)
+    Correctly map READER/EDITOR/OWNER grants:
+    - catalog.schema.table  -> TABLE-level grant
+    - catalog.schema        -> SCHEMA-level grant to SP/GROUPS
+    - principal             -> CATALOG-level grant
     """
     ROLE_PRIV_MAP = {
         "READER": "SELECT",
         "EDITOR": "MODIFY",
         "OWNER": "OWNERSHIP",
         "MAINTAINER": "ALL PRIVILEGES",
-        "ALLPRIVILAGES": "ALL PRIVILEGES",  # common typo passthrough
+        "ALLPRIVILAGES": "ALL PRIVILEGES",
     }
+
     for role, privilege in ROLE_PRIV_MAP.items():
         items = norm_list(cfg.get(role, []))
         for item in items:
             parts = item.split(".")
             if len(parts) == 3:
-                catalog, schema, principal = parts
-                run_sql(f"GRANT {privilege} ON SCHEMA {catalog}.{schema} TO `{principal}`", dry)
+                catalog, schema, table_or_view = parts
+                for p in principals_from_config(cfg):
+                    run_sql(f"GRANT {privilege} ON TABLE {catalog}.{schema}.{table_or_view} TO `{p}`", dry)
             elif len(parts) == 2:
                 catalog, schema = parts
                 for p in principals_from_config(cfg):
@@ -144,21 +128,12 @@ def grant_role_mapped(cfg: Dict[str, Any], dry: bool):
                 for cat in norm_list(cfg.get("USE_CATALOG", [])):
                     run_sql(f"GRANT {privilege} ON CATALOG {cat} TO `{principal}`", dry)
 
+# ---------------------------
+# Wildcard grants
+# ---------------------------
 def grant_wildcard(cfg: Dict[str, Any], dry: bool):
-    """
-    WILD_CARD_READER supports two formats:
-
-    1) Back-compat (string): "catalog.schema.table_pattern"
-       -> grants SELECT to all SP/GROUPS
-
-    2) Advanced (dict):
-       - pattern: catalog.schema.table_pattern
-         privilege: SELECT | MODIFY | ALL PRIVILEGES   (default SELECT)
-         principals: [group_or_sp...]                  (default SP+GROUPS)
-    """
     for entry in norm_list(cfg.get("WILD_CARD_READER", [])):
         if isinstance(entry, str):
-            # Back-compat string
             cat, sch, patt = entry.split(".", 2)
             for p in principals_from_config(cfg):
                 run_sql(f"GRANT SELECT ON TABLE {cat}.{sch}.{patt} TO `{p}`", dry)
@@ -170,6 +145,9 @@ def grant_wildcard(cfg: Dict[str, Any], dry: bool):
             for p in principals:
                 run_sql(f"GRANT {privilege} ON TABLE {cat}.{sch}.{patt} TO `{p}`", dry)
 
+# ---------------------------
+# Process YAML
+# ---------------------------
 def process_yaml_file(path: str, dry_run: bool, only_files: List[str] = None):
     if only_files and os.path.basename(path) not in only_files:
         return
@@ -178,18 +156,11 @@ def process_yaml_file(path: str, dry_run: bool, only_files: List[str] = None):
 
     print(f"\n📂 Processing file: {path}")
 
-    # Backward-compat simple grants:
     grant_catalog_basic(cfg, dry_run)
     grant_schema_basic(cfg, dry_run)
-
-    # Advanced custom-privilege grants:
     grant_catalog_advanced(cfg, dry_run)
     grant_schema_advanced(cfg, dry_run)
-
-    # Role-mapped grants (READER/EDITOR/OWNER/MAINTAINER/ALLPRIVILAGES):
     grant_role_mapped(cfg, dry_run)
-
-    # Wildcard table grants with principals + privileges:
     grant_wildcard(cfg, dry_run)
 
 # ---------------------------
@@ -217,138 +188,50 @@ def main():
 
 if __name__ == "__main__":
     main()
-#########################
-yaml
-########
+
+
+# Service Principals
 SP:
   - dbk-workflow
+
+# Groups
 GROUPS:
   - analyst_group
-  - data_engineers
 
-# Simple (back-compat): grants USE CATALOG to SP + GROUPS
+# Catalogs
 USE_CATALOG:
   - development
-  - production
 
-# Simple (back-compat): grants USE SCHEMA to SP + GROUPS (paired with USE_CATALOG)
-USE_SCHEMA:
-  - sales
-  - hr
-
-# Advanced catalog-level with custom privileges
-CATALOG_GRANTS:
-  - catalog: development
-    privilege: ALL PRIVILEGES
-    principals: [dbk-workflow]
-  - production   # shorthand -> acts like USE CATALOG to SP + GROUPS
-
-# Advanced schema-level with custom privileges
-SCHEMA_GRANTS:
-  - schema: production.finance
-    privilege: ALL PRIVILEGES
-    principals:
-      - data_engineers
-  - schema: development.analytics  # shorthand -> acts like USE SCHEMA to SP + GROUPS
-
-# Role-mapped classic entries
+# Schema/Table level grants
 READER:
-  - development.sales.analyst
-  - production.hr.data_engineer
+  - development.public.analyst
+  - development.sales.data_engineer
 
 EDITOR:
-  - development.hr.data_scientist
+  # Example: you can add table-level editor grants
+  - development.sales.data_analyst
 
 OWNER:
-  - dbk-workflow  # ownership at catalog level for each USE_CATALOG
+  # Example: you can add table-level ownership grants
+  - development.public.owner_user
 
-# Wildcard tables (support custom privilege & principals)
+ALLPRIVILEGES:
+  # Example: all privileges at catalog level
+  - development.super_user
+
+MAINTAINER:
+  # Example: maintainers
+  - development.maintainer_group
+
+# Wildcard table grants
 WILD_CARD_READER:
-  - pattern: development.operations.demo_%
+  # Backwards compatible string patterns
+  - development.operations.demo_%
+  - development.reporting.sales_%
+
+  # Advanced dict form (optional)
+  - pattern: development.analytics.%_view
     privilege: SELECT
-    principals: [dbk-workflow, analyst_group]
-  - pattern: production.reporting.sales_%
-    privilege: MODIFY
-    principals: [data_engineers]
-##### Optional
-SP:
-  - reporting-service
-GROUPS: []
-
-USE_CATALOG:
-  - staging
-
-SCHEMA_GRANTS:
-  - schema: staging.analytics
-    privilege: OWNERSHIP
-    principals: [reporting-service]
-
-WILD_CARD_READER:
-  - pattern: staging.analytics.tmp_%
-    privilege: SELECT
-    principals: [reporting-service]
-##### 
-Action yaml 
-name: Databricks Grants Check
-
-on:
-  pull_request:
-    paths:
-      - 'Grants/**/*.yml'
-      - 'Grants/**/*.yaml'
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Run mode: full | modified"
-        required: false
-        default: "modified"
-
-jobs:
-  grants:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: pip install pyyaml
-
-      - name: Determine files to check
-        id: files
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "${{ github.event.inputs.mode }}" = "full" ]; then
-              echo "mode=full" >> $GITHUB_OUTPUT
-            else
-              FILES=$(git diff --name-only origin/${{ github.ref_name }} -- Grants/ | grep -E '\.ya?ml$' || true)
-              if [ -n "$FILES" ]; then
-                echo "mode=changed" >> $GITHUB_OUTPUT
-                echo "files=$FILES" >> $GITHUB_OUTPUT
-              else
-                echo "mode=none" >> $GITHUB_OUTPUT
-              fi
-            fi
-          else
-            FILES=$(git diff --name-only origin/${{ github.base_ref }} -- Grants/ | grep -E '\.ya?ml$' || true)
-            if [ -n "$FILES" ]; then
-              echo "mode=changed" >> $GITHUB_OUTPUT
-              echo "files=$FILES" >> $GITHUB_OUTPUT
-            else
-              echo "mode=none" >> $GITHUB_OUTPUT
-            fi
-          fi
-
-      - name: Run Grants Runner (Dry Run)
-        if: steps.files.outputs.mode != 'none'
-        run: |
-          if [ "${{ steps.files.outputs.mode }}" = "full" ]; then
-            python grants_runner.py --grants-folder Grants --dry-run
-          elif [ "${{ steps.files.outputs.mode }}" = "changed" ]; then
-            python grants_runner.py --grants-folder Grants --dry-run --files ${{ steps.files.outputs.files }}
-          fi
+    principals:
+      - dbk-workflow
+      - analyst_group
