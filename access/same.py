@@ -94,39 +94,44 @@ def grant_schema_advanced(cfg: Dict[str, Any], dry: bool):
                     run_sql(f"GRANT {priv} ON SCHEMA {cat}.{sch} TO `{p}`", dry)
 
 # ---------------------------
-# Fixed Role Grants
+# Fixed Role Grants (table/view aware)
 # ---------------------------
 def grant_role_mapped(cfg: Dict[str, Any], dry: bool):
     """
     Correctly map READER/EDITOR/OWNER grants:
-    - catalog.schema.table  -> TABLE-level grant
-    - catalog.schema        -> SCHEMA-level grant to SP/GROUPS
-    - principal             -> CATALOG-level grant
+    - catalog.schema.table_or_view  -> TABLE-level
+    - catalog.schema                -> SCHEMA-level
+    - principal                     -> CATALOG-level
     """
     ROLE_PRIV_MAP = {
         "READER": "SELECT",
         "EDITOR": "MODIFY",
         "OWNER": "OWNERSHIP",
         "MAINTAINER": "ALL PRIVILEGES",
-        "ALLPRIVILAGES": "ALL PRIVILEGES",
+        "ALLPRIVILEGES": "ALL PRIVILEGES",
     }
 
     for role, privilege in ROLE_PRIV_MAP.items():
         items = norm_list(cfg.get(role, []))
         for item in items:
             parts = item.split(".")
-            if len(parts) == 3:
-                catalog, schema, table_or_view = parts
-                for p in principals_from_config(cfg):
-                    run_sql(f"GRANT {privilege} ON TABLE {catalog}.{schema}.{table_or_view} TO `{p}`", dry)
+            if len(parts) == 1:
+                # catalog-level grant
+                principal_list = principals_from_config(cfg)
+                for p in principal_list:
+                    run_sql(f"GRANT {privilege} ON CATALOG {item} TO `{p}`", dry)
             elif len(parts) == 2:
+                # schema-level grant
                 catalog, schema = parts
                 for p in principals_from_config(cfg):
                     run_sql(f"GRANT {privilege} ON SCHEMA {catalog}.{schema} TO `{p}`", dry)
-            elif len(parts) == 1:
-                principal = parts[0]
-                for cat in norm_list(cfg.get("USE_CATALOG", [])):
-                    run_sql(f"GRANT {privilege} ON CATALOG {cat} TO `{principal}`", dry)
+            else:
+                # table/view-level grant
+                catalog = parts[0]
+                table_or_view = parts[-1]
+                schema = ".".join(parts[1:-1])
+                for p in principals_from_config(cfg):
+                    run_sql(f"GRANT {privilege} ON TABLE {catalog}.{schema}.{table_or_view} TO `{p}`", dry)
 
 # ---------------------------
 # Wildcard grants
@@ -188,50 +193,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# Service Principals
-SP:
-  - dbk-workflow
-
-# Groups
-GROUPS:
-  - analyst_group
-
-# Catalogs
-USE_CATALOG:
-  - development
-
-# Schema/Table level grants
-READER:
-  - development.public.analyst
-  - development.sales.data_engineer
-
-EDITOR:
-  # Example: you can add table-level editor grants
-  - development.sales.data_analyst
-
-OWNER:
-  # Example: you can add table-level ownership grants
-  - development.public.owner_user
-
-ALLPRIVILEGES:
-  # Example: all privileges at catalog level
-  - development.super_user
-
-MAINTAINER:
-  # Example: maintainers
-  - development.maintainer_group
-
-# Wildcard table grants
-WILD_CARD_READER:
-  # Backwards compatible string patterns
-  - development.operations.demo_%
-  - development.reporting.sales_%
-
-  # Advanced dict form (optional)
-  - pattern: development.analytics.%_view
-    privilege: SELECT
-    principals:
-      - dbk-workflow
-      - analyst_group
