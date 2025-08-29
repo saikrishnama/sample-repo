@@ -1,22 +1,33 @@
 #!/usr/bin/env python3
-# %pip install pyyaml
+# %pip install pyyaml databricks-sql-connector
 
 import os
 import sys
 import yaml
 import argparse
 from typing import List, Dict, Any
+from databricks import sql
+
+# ---------------------------
+# Databricks SQL execution
+# ---------------------------
+def run_sql(sql_text: str, dry_run: bool):
+    if dry_run:
+        print(f"[DRY RUN] {sql_text}")
+    else:
+        print(f"[EXECUTING] {sql_text}")
+        # Connect to Databricks SQL Warehouse
+        with sql.connect(
+            server_hostname=os.environ.get("DATABRICKS_HOST"),
+            http_path=os.environ.get("DATABRICKS_HTTP_PATH"),
+            access_token=os.environ.get("DATABRICKS_TOKEN")
+        ) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql_text)
 
 # ---------------------------
 # Helpers
 # ---------------------------
-def run_sql(sql: str, dry_run: bool):
-    if dry_run:
-        print(f"[DRY RUN] {sql}")
-    else:
-        print(f"[EXECUTING] {sql}")
-        # Replace with: spark.sql(sql) in Databricks
-
 def principals_from_config(cfg: Dict[str, Any]) -> List[str]:
     return list(cfg.get("SP", [])) + list(cfg.get("GROUPS", []))
 
@@ -36,7 +47,7 @@ def list_yaml_files(folder: str) -> List[str]:
     return files
 
 # ---------------------------
-# Core grant emission
+# Grant Functions
 # ---------------------------
 def grant_catalog_basic(cfg: Dict[str, Any], dry: bool):
     for catalog in norm_list(cfg.get("USE_CATALOG", [])):
@@ -88,14 +99,8 @@ def grant_schema_advanced(cfg: Dict[str, Any], dry: bool):
                 for p in principals:
                     run_sql(f"GRANT {priv} ON SCHEMA {cat}.{sch} TO `{p}`", dry)
 
-# ---------------------------
 # Table/View-level grants
-# ---------------------------
 def grant_role_mapped(cfg: Dict[str, Any], dry: bool):
-    """
-    Apply READER/EDITOR/OWNER/MAINTAINER/ALLPRIVILEGES to table/view only.
-    USE_SCHEMA entries are handled separately.
-    """
     ROLE_PRIV_MAP = {
         "READER": "SELECT",
         "EDITOR": "MODIFY",
@@ -109,7 +114,7 @@ def grant_role_mapped(cfg: Dict[str, Any], dry: bool):
         for item in items:
             parts = item.split(".")
             if len(parts) < 3:
-                continue  # catalog/schema-level grants handled separately
+                continue  # schema/catalog-level handled separately
 
             catalog = parts[0]
             table_or_view = parts[-1]
@@ -118,9 +123,7 @@ def grant_role_mapped(cfg: Dict[str, Any], dry: bool):
             for p in principals_from_config(cfg):
                 run_sql(f"GRANT {privilege} ON TABLE {catalog}.{schema}.{table_or_view} TO `{p}`", dry)
 
-# ---------------------------
 # Wildcard grants
-# ---------------------------
 def grant_wildcard(cfg: Dict[str, Any], dry: bool):
     for entry in norm_list(cfg.get("WILD_CARD_READER", [])):
         if isinstance(entry, str):
@@ -157,22 +160,38 @@ def process_yaml_file(path: str, dry_run: bool, only_files: List[str] = None):
 # CLI
 # ---------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Databricks grant generator (dry-run friendly)")
+    parser = argparse.ArgumentParser(description="Databricks grant generator")
     parser.add_argument("--grants-folder", default="Grants", help="Folder with YAML files")
     parser.add_argument("--dry-run", action="store_true", help="Print SQL only")
-    parser.add_argument("--files", nargs="*", help="Specific YAML filenames to process (basename)")
+    parser.add_argument("--files", nargs="*", help="Specific YAML filenames")
+    parser.add_argument("--full-run", action="store_true", help="Process all YAML files")
+    parser.add_argument("--modified-files", action="store_true", help="Process only modified YAML files")
     args = parser.parse_args()
 
     ensure_folder_exists(args.grants_folder)
     all_yaml = list_yaml_files(args.grants_folder)
 
-    files_to_run = all_yaml if not args.files else [f for f in all_yaml if f in args.files]
-    if args.files and not files_to_run:
-        print("⚠️ No matching YAML files to run.")
-        sys.exit(0)
+    files_to_run = []
+
+    if args.full_run:
+        files_to_run = all_yaml
+    elif args.modified_files:
+        result = os.popen("git diff --name-only origin/main -- Grants/").read()
+        modified = [f.strip() for f in result.splitlines() if f.strip().endswith((".yml", ".yaml"))]
+        files_to_run = [f for f in all_yaml if f in modified]
+        if not files_to_run:
+            print("⚠️ No modified YAML files found.")
+            sys.exit(0)
+    elif args.files:
+        files_to_run = [f for f in all_yaml if f in args.files]
+        if not files_to_run:
+            print("⚠️ No matching YAML files to run.")
+            sys.exit(0)
+    else:
+        files_to_run = all_yaml
 
     for fname in files_to_run:
-        process_yaml_file(os.path.join(args.grants_folder, fname), args.dry_run, None)
+        process_yaml_file(os.path.join(args.grants_folder, fname), args.dry_run)
 
     print("\n✅ Completed" + (" (Dry Run)" if args.dry_run else ""))
 
