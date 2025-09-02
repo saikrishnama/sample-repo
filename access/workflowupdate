@@ -1,0 +1,70 @@
+name: Databricks Grants
+
+on:
+  pull_request:
+    paths:
+      - 'Grants/**/*.yml'
+      - 'Grants/**/*.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'Grants/**/*.yml'
+      - 'Grants/**/*.yaml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode: full | modified"
+        required: false
+        default: "full"
+
+jobs:
+  grants:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install pyyaml databricks-sql-connector
+
+      - name: Run Grants Runner
+        id: grants
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          mkdir -p temp_grants_output
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "Running in PR -> DRY RUN mode"
+              python grants_runner.py --grants-folder Grants --dry-run --modified-files | tee temp_grants_output/output.txt
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.mode }}" = "full" ]; then
+              echo "Running MANUAL FULL RUN"
+              python grants_runner.py --grants-folder Grants --full-run | tee temp_grants_output/output.txt
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.mode }}" = "modified" ]; then
+              echo "Running MANUAL MODIFIED RUN"
+              python grants_runner.py --grants-folder Grants --modified-files | tee temp_grants_output/output.txt
+          elif [ "${{ github.event_name }}" = "push" ]; then
+              echo "Running on push to main -> FULL RUN"
+              python grants_runner.py --grants-folder Grants --full-run | tee temp_grants_output/output.txt
+          fi
+
+      - name: Comment on PR with Dry Run Output
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ## 🤖 Databricks Grants Dry Run
+            ```
+            ${{ steps.grants.outputs.stdout }}
+            ```
