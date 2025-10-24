@@ -10,7 +10,6 @@ def fetch_legacy_dashboards_paginated():
     """Fetch ALL legacy dashboards using next_page_token."""
     all_items = []
     next_page_token = None
-
     base_url = "/api/2.0/preview/sql/dashboards"
 
     while True:
@@ -51,7 +50,7 @@ def fetch_legacy_dashboards():
             "owner_name": db.get("owner_user_name", "N/A"),
             "create_time": created_at.isoformat() if created_at else "N/A",
             "update_time": updated_at.isoformat() if updated_at else "N/A",
-            "lifecycle_state": "ACTIVE",  # Legacy always active unless deleted manually
+            "lifecycle_state": "ACTIVE",
             "path": "N/A",
             "last_view": "N/A",
             "last_modified": updated_at.isoformat() if updated_at else "N/A",
@@ -59,9 +58,38 @@ def fetch_legacy_dashboards():
         })
     return legacy
 
+# -------- Filter by User -------- #
+def filter_dashboards_by_user(dashboards, users=None):
+    """
+    Filter dashboards by one or more users (by email or name).
+    Args:
+        dashboards (list): List of dashboards.
+        users (list | str | None): List or comma-separated string of user emails/names.
+    Returns:
+        list: Filtered dashboards.
+    """
+    if not users:
+        return dashboards
+
+    # Normalize user input (list or string)
+    if isinstance(users, str):
+        users = [u.strip().lower() for u in users.split(",")]
+
+    filtered = []
+    for db in dashboards:
+        owner_email = db.get("owner_email", "").lower()
+        owner_name = db.get("owner_name", "").lower()
+        if any(u in owner_email or u in owner_name for u in users):
+            filtered.append(db)
+
+    print(f"Filtered {len(filtered)} dashboards (out of {len(dashboards)}) for users: {', '.join(users)}")
+    return filtered
+
 # -------- Export to Excel -------- #
-def export_legacy_dashboards_to_excel():
+def export_legacy_dashboards_to_excel(user_filter=None):
     legacy = fetch_legacy_dashboards()
+    legacy = filter_dashboards_by_user(legacy, user_filter)
+
     print(f"Total Legacy Dashboards Retrieved: {len(legacy)}")
 
     df = pd.DataFrame(legacy, columns=[
@@ -90,4 +118,8 @@ def export_legacy_dashboards_to_excel():
     print(f"✅ Excel file created: {output_file}")
 
 if __name__ == "__main__":
-    export_legacy_dashboards_to_excel()
+    # Example usage:
+    # To export all dashboards → export_legacy_dashboards_to_excel()
+    # To filter for one user → export_legacy_dashboards_to_excel("user@example.com")
+    # To filter for multiple → export_legacy_dashboards_to_excel("user1@example.com, user2@example.com")
+    export_legacy_dashboards_to_excel("user1@example.com, user2@example.com")
