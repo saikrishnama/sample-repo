@@ -1,0 +1,26 @@
+Databricks Application Stop/Start Monitoring
+Feature Description
+Overview
+The Databricks Application Stop/Start Monitoring capability provides a structured and automated approach to managing application runtime behavior. This feature ensures that compute resources are used efficiently while still supporting applications that require continuous operation. The framework applies a default shutdown policy with clearly defined exception mechanisms for both new and existing workloads.
+
+1. Default Shutdown Policy
+All Databricks applications are subject to a default stop action during each monitoring cycle.
+This ensures that applications not explicitly designated for continuous operation do not remain running unnecessarily, supporting both cost optimization and operational hygiene.
+
+2. Exception Mechanism for DAB‑Provisioned Applications
+Applications deployed through Databricks Asset Bundles (DAB) can be exempted from the default shutdown policy.
+
+A dedicated exception tag must be included during provisioning.
+
+When this tag is present, the monitoring system identifies the application as requiring 24/7/365 availability.
+
+These applications are automatically excluded from the stop workflow and remain continuously operational.
+
+This tag‑based approach provides a standardized, auditable method for teams to request and justify continuous runtime.
+
+3. Exception Handling for Pre‑Existing Applications
+To ensure backward compatibility, applications created prior to the introduction of this feature are managed through a centralized exception JSON file.
+
+If an application’s name appears in this file, it is automatically excluded from the stop process.
+
+This prevents disruption to legacy workloads while teams transition to the new tagging model.
