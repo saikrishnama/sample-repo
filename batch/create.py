@@ -1,38 +1,16 @@
-import json
-import boto3
-import sys
-from botocore.exceptions import ClientError
+📢 New Feature Rollout: Databricks Long-Running App Monitoring & After-Hours Auto-Shutdown
 
-def create_s3_batch_job(json_file_path):
-    try:
-        # Load job parameters from JSON file
-        with open(json_file_path, 'r') as f:
-            job_config = json.load(f)
+We’re excited to announce the rollout of a new feature in our Databricks app platform:
+Long-Running Application Monitoring with After-Hours Automatic Shutdown.
 
-        # Extract AccountId (required for the API call)
-        account_id = job_config.pop("AccountId")
+This feature helps reduce unnecessary compute costs and improve operational efficiency by:
 
-        # Create S3 Control client
-        s3control = boto3.client('s3control')
+Continuously monitoring long-running and idle applications
 
-        # Create the job
-        response = s3control.create_job(
-            AccountId=account_id,
-            **job_config
-        )
+Automatically shutting down unused or stuck jobs after business hours only
 
-        print("Job created successfully:")
-        print(json.dumps(response, indent=2))
+Providing real-time visibility into execution status and resource usage
 
-    except FileNotFoundError:
-        print(f"Error: File {json_file_path} not found.")
-    except ClientError as e:
-        print(f"ClientError: {e.response['Error']['Message']}")
-    except Exception as e:
-        print(f"Unexpected error: {str(e)}")
+Preventing wasted compute spend during off-hours
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python create_s3_batch_job.py job_config.json")
-    else:
-        create_s3_batch_job(sys.argv[1])
+With this enhancement, teams can safely run workloads during business hours while the platform intelligently manages resources after hours, ensuring lower costs, higher efficiency, and reliable operations by default.
