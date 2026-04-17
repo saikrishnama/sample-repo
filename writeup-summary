@@ -1,14 +1,23 @@
-extend with this 
-Databricks Application Stop/Start Monitoring
+Databricks Application Stop/Start Monitoring and Auto-Deletion Policy
 Feature Description
 Overview
+
 The Databricks Application Stop/Start Monitoring capability provides a structured and automated approach to managing application runtime behavior. This feature ensures that compute resources are used efficiently while still supporting applications that require continuous operation. The framework applies a default shutdown policy with clearly defined exception mechanisms for both new and existing workloads.
 
+As part of our continued cloud optimization strategy, we are extending this capability beyond application stop/start monitoring to include automated deletion of inactive applications. Previously, the process focused on stopping Databricks applications that were no longer actively in use. The new enhancement introduces a lifecycle-based cleanup policy where applications that remain stopped and unused for more than 30 days will be automatically deleted unless they are covered under an approved exception.
+
+This helps reduce unnecessary infrastructure costs, improves resource utilization, minimizes operational overhead, and ensures better platform hygiene by removing stale or abandoned applications.
+
 1. Default Shutdown Policy
+
 All Databricks applications are subject to a default stop action during each monitoring cycle.
+
 This ensures that applications not explicitly designated for continuous operation do not remain running unnecessarily, supporting both cost optimization and operational hygiene.
 
-2. Exception Mechanism for DAB‑Provisioned Applications
+Applications identified as inactive are automatically transitioned to a stopped state as part of the standard monitoring process.
+
+2. Exception Mechanism for DAB-Provisioned Applications
+
 Applications deployed through Databricks Asset Bundles (DAB) can be exempted from the default shutdown policy.
 
 A dedicated exception tag must be included during provisioning.
@@ -17,11 +26,54 @@ When this tag is present, the monitoring system identifies the application as re
 
 These applications are automatically excluded from the stop workflow and remain continuously operational.
 
-This tag‑based approach provides a standardized, auditable method for teams to request and justify continuous runtime.
+This tag-based approach provides a standardized, auditable method for teams to request and justify continuous runtime while maintaining governance and operational transparency.
 
-3. Exception Handling for Pre‑Existing Applications
+3. Exception Handling for Pre-Existing Applications
+
 To ensure backward compatibility, applications created prior to the introduction of this feature are managed through a centralized exception JSON file.
 
 If an application’s name appears in this file, it is automatically excluded from the stop process.
 
 This prevents disruption to legacy workloads while teams transition to the new tagging model.
+
+This centralized exception management also allows platform teams to maintain visibility and control over older workloads that still require continuous availability.
+
+4. Auto-Deletion of Stopped Applications After 30 Days
+
+As an extension of the stop/start monitoring framework, applications that remain in a stopped state for more than 30 consecutive days will be automatically scheduled for deletion.
+
+The deletion policy applies only to applications that:
+
+Have already been stopped by the monitoring process
+Remain inactive for more than 30 days
+Do not have an approved exception for retention
+
+This policy ensures that unused applications do not continue consuming platform metadata, storage dependencies, and administrative overhead.
+
+The deletion process supports:
+
+Cloud cost reduction
+Improved resource governance
+Cleaner application inventory management
+Reduced operational complexity
+Elimination of stale and abandoned workloads
+5. Exception Handling for Deletion
+
+Applications requiring retention beyond the 30-day stopped period must have a valid business, compliance, audit, or operational justification.
+
+Approved exceptions will prevent automatic deletion and allow the application to remain in a stopped state until further review.
+
+Teams requesting deletion exceptions must provide:
+
+Business justification
+Application ownership details
+Expected retention period
+Required approval from designated governance owners
+
+This ensures flexibility for critical workloads while maintaining strong governance controls.
+
+Conclusion
+
+This enhanced Databricks Application Stop/Start Monitoring and Auto-Deletion framework supports efficient cloud resource management by combining automated stopping, exception-driven continuous runtime support, and lifecycle-based cleanup for inactive applications.
+
+By introducing automatic deletion after 30 days of inactivity, the platform strengthens cost optimization, improves operational discipline, and aligns with enterprise cloud governance standards while preserving flexibility for business-critical applications through controlled exception handling.
