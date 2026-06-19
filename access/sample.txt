@@ -1,0 +1,358 @@
+# AI Agent Observability — A Guide for Leadership
+
+**Prepared for:** Engineering & Platform Leadership
+**Author:** K. Mandava
+**Date:** June 18, 2026
+**Status:** For review and discussion
+
+---
+
+## Executive summary
+
+We are putting AI agents into production faster than we are putting in place the
+means to see what they are doing. That gap — not the models themselves — is the
+real risk. An agent that can call tools, write to systems, and make decisions on
+its own needs the same operational scrutiny we already demand of any production
+service, plus several things that are unique to it.
+
+This document does three things. First, it explains why observing an agent is
+genuinely different from observing a normal service. Second, it defines the
+**categories** of agent observability — what each one measures, and the honest
+pros and cons of each. Third, it surveys the **platforms** the industry is
+converging on (LangSmith, AWS Bedrock AgentCore, Microsoft Agent Framework,
+Databricks, CrowdStrike Falcon AIDR) with pros and cons for each, and closes with
+a phased plan and a concrete ask.
+
+The throughline: the industry has standardized on **OpenTelemetry's GenAI
+semantic conventions** as the common language for agent telemetry. If we
+instrument against that standard, we stay portable across every tool below and
+avoid vendor lock-in. That single decision is the most important one in this
+document.
+
+---
+
+## Why this matters now
+
+Traditional software is deterministic. Given the same input it does the same
+thing, and when it breaks it breaks loudly — a stack trace, a 500, a failed
+health check. We have decades of tooling built on that assumption.
+
+AI agents break it in three ways:
+
+1. **They are non-deterministic.** The same request can produce different actions
+   on two runs. "It worked when I tried it" is no longer evidence that it works.
+2. **They take actions, not just return answers.** A chatbot that gives a bad
+   answer is embarrassing. An agent with permission to stop services, modify
+   records, send messages, or spend money can cause real damage before anyone
+   notices.
+3. **They fail quietly.** A reasoning loop can spin for thousands of dollars in
+   tokens and still return `HTTP 200`. The logs look clean. The damage is in the
+   *decision*, not the execution. (The dev.to "4 pillars" piece frames this
+   memorably as the "$2,000-at-3-AM" failure.)
+
+Put plainly: we have systems that can act, that don't behave the same way twice,
+and that fail without raising their hand. That is exactly where you want strong
+observability, and it is exactly where most teams have the least.
+
+---
+
+## A concrete example from our own code
+
+The kind of safeguard we need already shows up internally. Here is a policy check
+that refuses to let an agent shut down endpoints in a production workspace unless
+the operator explicitly asked for a dry run:
+
+```python
+def enforce_policy(workspace_name: str, stop_all: bool, dry_run: bool) -> None:
+    if (
+        workspace_name.lower() in PROD_WORKSPACE_NAMES
+        and stop_all
+        and not dry_run
+    ):
+        raise PolicyViolationError(
+            f"Cannot stop endpoints in '{workspace_name}' without dry_run"
+        )
+```
+
+This is good defensive design — but notice the limit. It *prevents* one dangerous
+action. It does **not** tell us how often the agent *tried* it, whether attempts
+are trending up, which prompts led there, or whether the agent is finding ways
+around the rule. A policy check is a seatbelt. Observability is the dashboard that
+tells you the driver keeps swerving toward the wall. We need both, and today we
+are mostly buying seatbelts.
+
+---
+
+## Part 1 — The categories of agent observability
+
+Different sources slice this differently. The Medium guide frames the **three
+classic pillars** (metrics, traces, logs); the dev.to piece reframes them for
+agents specifically into **four operational pillars** (cost, quality, behavior,
+dependencies). Both are useful. Below I merge them into the categories I'd
+actually put on a dashboard, each with what it measures and its trade-offs.
+
+### Category 1 — Execution tracing (behavioral observability)
+
+**What it is:** A complete, replayable record of a single run — the input, each
+reasoning step, every tool call with its arguments and result, and the final
+action. Each operation is a "span" within a trace hierarchy. This is the single
+most valuable thing we can build; when something goes wrong, the trace is the
+difference between a five-minute diagnosis and a two-day investigation.
+
+| Pros | Cons |
+|---|---|
+| Reveals *why* the agent acted, not just *what* HTTP calls fired | High data volume; full traces with prompts/responses get large fast |
+| Enables post-mortem replay and reproducing rare failures | Storing prompts/responses raises privacy/compliance concerns |
+| Two cheap signals — reasoning depth and tool-call count — catch ~80% of agent failures (per dev.to) | Requires disciplined instrumentation across every component |
+| Standardized via OpenTelemetry spans (`invoke_agent`, `chat`, `execute_tool`) | Without sampling, overhead and cost can creep up |
+
+### Category 2 — Quality & evaluation observability
+
+**What it is:** Did the agent actually accomplish the task? Captured through
+task-success rate, human-intervention rate, "LLM-as-judge" scoring, and **canary
+evaluations** — a small suite of known-correct queries run continuously in
+production to catch silent model degradation and drift (dev.to suggests every ~5
+minutes, alert below 90% pass). LangSmith and Databricks both let teams run
+online judges against live traces.
+
+| Pros | Cons |
+|---|---|
+| Measures the thing leadership actually cares about — is it any good? | Quality is subjective; LLM-judges can themselves be wrong or biased |
+| Canaries catch runtime regressions that pre-deployment tests miss | Building good eval datasets and judges takes real effort |
+| Detects provider-side model changes and semantic drift early | Continuous evaluation adds its own token/compute cost |
+| Closes the loop: production failures become new test cases | Hard to fully automate; some human review remains necessary |
+
+### Category 3 — Cost & resource observability
+
+**What it is:** Token consumption, number of model calls per task, burn rate
+(tokens/sec), and dollar cost per *completed* task. The dev.to piece recommends a
+per-run token ledger with a **hard budget cap** and anomaly alerts when burn rate
+exceeds ~3× the rolling average — catching cost spikes in seconds instead of at
+month-end.
+
+| Pros | Cons |
+|---|---|
+| Prevents runaway "reasoning spiral" spend before the invoice arrives | Cost ≠ value; cheap runs can still be wrong, expensive ones correct |
+| Cost-per-completed-task tells us whether this scales economically | Hard caps can cut off legitimate long-running tasks |
+| Easy to instrument — token counts come straight from the model API | Needs per-team/per-agent attribution to be actionable |
+
+### Category 4 — Dependency & infrastructure observability
+
+**What it is:** Health of everything the agent depends on — the LLM provider,
+vector DBs, tool APIs, databases — with granular per-tool status and latency.
+When accuracy drops, the first question is "is it us or a dependency?" and this
+category answers it.
+
+| Pros | Cons |
+|---|---|
+| Separates agent failures from infrastructure/provider failures | Yet another set of health checks to build and maintain |
+| Granular per-tool status beats a binary OK/fail signal | Distributed tracing across many tools adds complexity |
+| Frequent health probes (~60s) catch outages fast | Probes add load and a small ongoing cost |
+
+### Category 5 — Safety, policy & security observability
+
+**What it is:** Every guardrail trip, refused action, escalation to a human — and,
+increasingly, active security monitoring for prompt injection, data exfiltration,
+and "shadow AI." These are low-volume, high-importance events and should be
+treated like security events, not buried in debug logs. This is the category
+CrowdStrike Falcon AIDR targets directly.
+
+| Pros | Cons |
+|---|---|
+| Early warning of misuse, drift, or adversarial activity | Can generate alert fatigue if thresholds aren't tuned |
+| Creates the audit trail regulators increasingly demand | Capturing full prompt/response for audit collides with privacy |
+| Detects prompt-injection and data-leak attempts in real time | Dedicated security tooling is an additional spend |
+
+> **The three classic pillars underneath all of this:** *Metrics* (quantitative —
+> latency, throughput, tokens, error counts), *Traces* (execution flow as spans),
+> and *Logs* (the actual prompts, responses, and errors for content-level
+> debugging). The five categories above are these three pillars applied to the
+> specific ways agents behave.
+
+---
+
+## Part 2 — The standardization layer: OpenTelemetry GenAI
+
+Before tools, the standard. OpenTelemetry's GenAI Special Interest Group has
+defined **semantic conventions** for AI telemetry — a common shape for spans,
+attributes, and metrics so that frameworks and monitoring tools "speak the same
+language." The agent-application conventions are finalized; framework conventions
+(CrewAI, LangGraph, AutoGen, etc.) are in progress.
+
+Concretely, an instrumented run emits standardized spans such as
+`invoke_agent <name>` (the top-level span), `chat <model>` (the model call, with
+prompt/response when sensitive data is enabled), and `execute_tool <function>`
+(each tool call with arguments/results), plus metrics like
+`gen_ai.client.token.usage` and operation duration.
+
+| Pros | Cons |
+|---|---|
+| Vendor-neutral — instrument once, export anywhere | Conventions are still evolving; some parts marked experimental |
+| Every platform below ingests OTEL, so no lock-in | "Sensitive data" capture (prompts/responses) is off by default for good reason — needs deliberate handling |
+| One telemetry shape across all our agents and teams | Requires the team to learn OTEL concepts up front |
+
+**Recommendation:** Standardize on OpenTelemetry GenAI conventions as our baseline.
+Every platform in Part 3 builds on it, which keeps our options open.
+
+---
+
+## Part 3 — The platform landscape (pros & cons per option)
+
+These are the major options, each fed by the same OTEL telemetry. They are not
+mutually exclusive — most organizations use a developer/observability platform
+plus a security platform.
+
+### LangSmith (LangChain)
+
+Tracing, monitoring, and "insights." Framework-agnostic (works with OpenAI,
+Anthropic, LlamaIndex, custom code — not just LangChain), with online LLM-as-judge
+evals, P50/P99 dashboards, trajectory monitoring, and PagerDuty/webhook alerting.
+
+| Pros | Cons |
+|---|---|
+| Best-in-class developer experience for tracing and debugging | Primarily a SaaS dependency; self-host exists but is heavier |
+| Strong evaluation tooling (online judges, clustering, error analysis) | Cost scales with trace volume |
+| Framework-agnostic + native OTEL support | Most natural fit if you're already in the LangChain ecosystem |
+
+### AWS Bedrock AgentCore Observability
+
+CloudWatch-backed observability for agents, gateways, and memory resources.
+Built-in metrics (session count, latency, duration, token usage, error rates),
+OTEL-compatible telemetry, trace visualizations, and metadata tagging/filtering.
+
+| Pros | Cons |
+|---|---|
+| Deep AWS-native integration; little wiring if you're on AWS | Ties you to AWS/CloudWatch as the backend |
+| Sensible built-in metrics out of the box | Less rich agent-specific eval tooling than LangSmith/Databricks |
+| OTEL-compatible, stored in governed CloudWatch | Cross-cloud / multi-provider stories are weaker |
+
+### Microsoft Agent Framework (+ Azure / Foundry)
+
+Emits traces, logs, and metrics per the OTEL GenAI conventions, with multiple
+config paths (env-vars, custom exporters, zero-code auto-instrumentation) and
+local visualization via the Aspire Dashboard. Notably propagates trace context to
+**MCP servers**, enabling distributed tracing across agent-to-tool boundaries.
+
+| Pros | Cons |
+|---|---|
+| Standards-first; clean OTEL spans (`invoke_agent`/`chat`/`execute_tool`) | Richest experience assumes the Azure/Foundry stack |
+| Zero-code auto-instrumentation lowers adoption cost | Sensitive-data capture is opt-in and must be handled carefully |
+| Distributed tracing across MCP tool boundaries | Newer framework; ecosystem still maturing |
+
+### Databricks (MLflow + Unity Catalog)
+
+Ingests OTEL traces into **Unity Catalog** Delta tables via a serverless pipeline.
+MLflow's `@mlflow.trace` decorator instruments agents; traces inherit UC
+governance (column masking, row filtering, access control). Teams bootstrap eval
+datasets from production traces, run LLM judges, and query everything with SQL.
+
+| Pros | Cons |
+|---|---|
+| Governance built in — critical when prompts/responses are sensitive | Most valuable if you already run on Databricks/Lakehouse |
+| Traces become queryable data (SQL, ETL, dashboards) | Heavier platform footprint than a point observability tool |
+| Strong production→evaluation "flywheel" for continuous improvement | Learning curve for teams new to MLflow/Unity Catalog |
+
+### CrowdStrike Falcon AIDR (AI Detection & Response)
+
+A **security** lens, not a developer-observability tool. Maps relationships between
+users, prompts, models, agents, and MCP servers; captures runtime logs; and
+detects prompt-injection attacks (claimed ~99% efficacy, sub-30ms) while blocking
+sensitive-data exfiltration and surfacing "shadow AI."
+
+| Pros | Cons |
+|---|---|
+| Purpose-built for AI threat detection and policy enforcement | Not a substitute for tracing/eval/cost observability |
+| Addresses shadow AI, prompt injection, data-leak prevention | Additional security-vendor spend |
+| Real-time enforcement across users, agents, tools, models | Overlaps with existing security stack — needs integration planning |
+
+---
+
+## Part 4 — The metrics I'd put on the leadership dashboard
+
+If we did nothing else, leadership should see these weekly:
+
+| Metric | Category | What it tells us |
+|---|---|---|
+| Task success rate | Quality | Is this thing working? |
+| Human-intervention rate | Quality | Real autonomy vs. expensive supervision |
+| Policy/guardrail trips | Safety | Early warning of drift or misuse |
+| Tool error rate | Dependency | Where the agent hits friction |
+| Cost per completed task | Cost | Whether it scales economically |
+| Burn-rate anomalies | Cost | Catches runaway-spend before the invoice |
+| P95 task latency | Tracing/Metrics | The experience we actually deliver |
+
+None of these are exotic. The point is that today, for most of our agents, we
+can't reliably report *any* of them.
+
+---
+
+## Part 5 — Best practices (synthesized across all sources)
+
+1. **Standardize on OpenTelemetry GenAI conventions early** — portability and no
+   lock-in.
+2. **Instrument comprehensively, then sample** — eliminate blind spots, but use
+   sampling and asynchronous logging so observability never blocks or slows the
+   agent.
+3. **Correlate everything with consistent IDs** — request, session, and trace IDs
+   tie a story together across tools and multi-agent boundaries.
+4. **Evaluate continuously in production** — canary suites and online judges; don't
+   trust pre-deployment evals alone.
+5. **Cap and alert on cost** — per-session token ledgers, hard budget caps,
+   burn-rate anomaly alerts.
+6. **Govern sensitive telemetry** — prompts and responses often contain regulated
+   data; mask, restrict access, and keep sensitive-data capture out of production
+   logs by default.
+7. **Treat safety events as security events** — guardrail trips and injection
+   attempts deserve real alerting, not a debug log.
+
+---
+
+## Part 6 — A phased plan
+
+**Phase 1 — See what's happening (4–6 weeks).** Instrument our existing production
+agents with OpenTelemetry tracing and the dashboard metrics above. One shared
+dashboard. Goal: stop flying blind. No big infrastructure commitment yet.
+
+**Phase 2 — Alert and review (next quarter).** Add alerting on the signals that
+matter (guardrail spikes, success-rate drops, cost anomalies). Stand up a
+human-review queue for high-consequence actions. Pick the primary platform from
+Part 3 based on where our stack already lives.
+
+**Phase 3 — Close the loop (ongoing).** Use trace data to improve the agents:
+replay failed runs, build regression tests from real failures, run continuous
+evaluation. Layer in security monitoring (AIDR-class) as agent reach grows. This
+is where observability stops being insurance and becomes a competitive advantage.
+
+---
+
+## What I'm asking for
+
+1. **Agreement** that agent observability is a funded priority this half, and that
+   we standardize on OpenTelemetry GenAI conventions.
+2. **A small working group** — one or two engineers — to own Phase 1.
+3. **A standing 15 minutes** in the weekly ops review to look at the agent
+   dashboard, so this stays visible at the leadership level.
+
+The investment is modest and the work is mostly instrumentation we know how to do.
+What we're really buying is the ability to answer one question with confidence:
+*what are our agents doing, and is it what we want?* Right now, for most of them,
+the honest answer is that we don't fully know — and we should fix that before the
+stakes get higher.
+
+---
+
+## Sources
+
+- *Mastering AI Agent Observability: A Comprehensive Guide* — Medium / Online Inference
+- *The 4 Pillars That Keep Your Agents From Burning $2,000 at 3 AM* — dev.to (The Daily Agent)
+- *AI Agent Observability* — OpenTelemetry blog (2025)
+- *LangSmith Observability* — LangChain
+- *Agent Observability on Amazon Bedrock AgentCore* — AWS Documentation
+- *Observability* — Microsoft Agent Framework (Microsoft Learn)
+- *Observability for Any Agent, Anywhere: Production-Ready Tracing with OpenTelemetry & Unity Catalog* — Databricks
+- *Falcon AIDR — AI Detection and Response* — CrowdStrike
+- *Agent Factory: Top 5 Agent Observability Best Practices for Reliable AI* — Microsoft Azure blog
+
+*Note: the Azure "Agent Factory" post is cited at the thematic level (continuous
+monitoring, evaluation, tracing, governance) because the page could not be fully
+retrieved at time of writing.*
