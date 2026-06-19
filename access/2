@@ -1,0 +1,120 @@
+# Traditional Observability vs. Agent Observability
+
+**AI Agent Observability Series — Foundational Document (0 of 6)**
+**Author:** K. Mandava · **Date:** June 19, 2026
+
+---
+
+## Why this distinction matters
+
+Before we talk about tools, dashboards, or metrics, we need to be clear on one
+thing: **observing an AI agent is not the same as observing a traditional
+service.** The tooling we already trust was designed for systems that behave
+predictably. Agents do not. Treating them the same is the root cause of most
+"the agent did something surprising and we couldn't explain it" incidents.
+
+This document lays out the difference plainly, so the rest of the series — the
+categories, the standards, the platforms — sits on a shared foundation.
+
+---
+
+## Traditional observability: the three pillars
+
+Traditional observability rests on three foundational pillars:
+
+- **Metrics** — quantitative measures of system health: latency, throughput,
+  error rates, resource utilization.
+- **Logs** — detailed event records that provide context for debugging.
+- **Traces** — the execution flow across components, showing where time is spent
+  and where failures occur.
+
+Together these give us visibility into system performance, help diagnose failures,
+and support root-cause analysis. They are **well-suited to conventional software**,
+where the focus is on infrastructure health, latency, and throughput — and where
+the same input reliably produces the same output.
+
+---
+
+## Why agents need more
+
+AI agents are **non-deterministic**. The same request can produce different actions
+on different runs. On top of that, they introduce three new dimensions that
+traditional tooling was never designed to capture:
+
+- **Autonomy** — agents take actions on their own, not just return answers.
+- **Reasoning** — they make multi-step decisions that need to be inspected, not
+  just timed.
+- **Dynamic decision-making** — they choose *which* tools to call and *when*,
+  differently each time.
+
+The three pillars tell us *what happened* and *how fast*. They do not tell us
+*whether the agent made a good decision* or *whether it was allowed to make that
+decision at all.* That is the gap.
+
+---
+
+## Agent observability: the three pillars plus two
+
+Agent observability **builds on** traditional methods and adds two critical
+components:
+
+### 4. Evaluations
+
+Evaluations assess **how well the agent actually did its job** — not whether the
+service was up, but whether the agent:
+
+- resolved the user's intent,
+- adhered to the assigned task,
+- and used its tools effectively.
+
+This is where we measure quality and correctness, continuously, rather than
+assuming a `200 OK` means success.
+
+### 5. Governance
+
+Governance ensures agents **operate safely, ethically, and in compliance** with
+our organizational standards. It covers guardrails, policy enforcement, audit
+trails, and the controls that keep an autonomous system inside its intended
+boundaries.
+
+---
+
+## Side-by-side summary
+
+| Dimension | Traditional Observability | Agent Observability |
+|---|---|---|
+| **Foundation** | Metrics, Logs, Traces | Metrics, Logs, Traces **+ Evaluations + Governance** |
+| **System behavior** | Deterministic — same input, same output | Non-deterministic — output varies per run |
+| **Primary question** | Is the system healthy and fast? | Is the agent making good, safe, on-task decisions? |
+| **Focus** | Infrastructure, latency, throughput | Autonomy, reasoning, dynamic decision-making |
+| **Failure signal** | Loud — errors, crashes, 500s | Quiet — confident but wrong actions |
+| **Success measure** | Uptime, response time | Did it resolve intent? Did it stay in policy? |
+| **What it answers** | *What* happened | *What*, *why*, and *how* it happened |
+
+---
+
+## What this expanded approach gives us
+
+This expanded model enables deeper visibility into agent behavior — **not just what
+agents do, but why and how they do it.** It supports continuous monitoring across
+the **entire agent lifecycle**, from development through production, and it is
+essential for building trustworthy, high-performing AI systems at scale.
+
+In short: metrics, logs, and traces tell us the agent *ran*. Evaluations tell us
+it ran *well*. Governance tells us it ran *within bounds*. We need all five to
+trust an autonomous system in production.
+
+---
+
+## How this connects to the rest of the series
+
+- The **five categories** in [Part 1](01-categories-of-observability.md) are these
+  five pillars expressed as things you can put on a dashboard.
+- [Part 2](02-opentelemetry-standardization.md) covers the standard (OpenTelemetry
+  GenAI) that carries the metrics/logs/traces consistently.
+- [Part 3](03-platform-landscape.md) surveys the platforms that deliver
+  evaluations and governance on top.
+
+---
+
+**Next:** [Part 1 — Categories of Observability](01-categories-of-observability.md)
