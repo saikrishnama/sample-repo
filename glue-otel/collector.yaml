@@ -1,0 +1,45 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  batch:
+    timeout: 5s
+    send_batch_size: 256
+    send_batch_max_size: 512
+
+exporters:
+  # Keep this debug exporter enabled during the POC. Remove it after you
+  # confirm Glue -> ADOT. It is useful for proving that spans arrive.
+  debug:
+    verbosity: basic
+
+  awsxray:
+    region: ${env:AWS_REGION}
+
+    # Only use low-cardinality attributes as X-Ray indexed annotations.
+    indexed_attributes:
+      - aws.glue.job.name
+      - aws.glue.job.type
+      - deployment.environment
+
+service:
+  pipelines:
+    traces:
+      receivers:
+        - otlp
+      processors:
+        - memory_limiter
+        - batch
+      exporters:
+        - debug
+        - awsxray
