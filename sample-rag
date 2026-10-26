@@ -1,9 +1,22 @@
 
+"""
+Confluence RAG using Databricks Embeddings and ChromaDB.
+
+This script:
+1. Reads pages from a Confluence space.
+2. Cleans page content and ignores empty pages.
+3. Splits useful text into smaller chunks.
+4. Creates embeddings through Databricks.
+5. Stores the embeddings in a local ChromaDB database.
+6. Retrieves relevant documentation for a question.
+
+No sentence-transformers or PyTorch dependency is required.
+"""
+
 import os
 import re
 import hashlib
 import argparse
-from typing import Any
 
 import requests
 import chromadb
@@ -11,75 +24,96 @@ import chromadb
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
+
+# ---------------------------------------------------------
+# Load configuration
+# ---------------------------------------------------------
+
 load_dotenv()
 
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
+CONFLUENCE_URL = os.getenv(
+    "CONFLUENCE_URL", ""
+).rstrip("/")
 
-CONFLUENCE_URL = os.getenv("CONFLUENCE_URL", "").rstrip("/")
-CONFLUENCE_EMAIL = os.getenv("CONFLUENCE_EMAIL", "")
-CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN", "")
-CONFLUENCE_SPACE_KEY = os.getenv("CONFLUENCE_SPACE_KEY", "")
-
-CHROMA_FOLDER = os.getenv(
-    "CHROMA_FOLDER", "./confluence_chroma"
-)
-CHROMA_COLLECTION = os.getenv(
-    "CHROMA_COLLECTION", "confluence_onboarding"
+CONFLUENCE_EMAIL = os.getenv(
+    "CONFLUENCE_EMAIL", ""
 )
 
-EMBEDDING_PROVIDER = os.getenv(
-    "EMBEDDING_PROVIDER", "fastembed"
-).lower()
+CONFLUENCE_API_TOKEN = os.getenv(
+    "CONFLUENCE_API_TOKEN", ""
+)
 
-FASTEMBED_MODEL = os.getenv(
-    "FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5"
+CONFLUENCE_SPACE_KEY = os.getenv(
+    "CONFLUENCE_SPACE_KEY", ""
 )
 
 DATABRICKS_HOST = os.getenv(
     "DATABRICKS_HOST", ""
 ).rstrip("/")
-DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN", "")
+
+DATABRICKS_TOKEN = os.getenv(
+    "DATABRICKS_TOKEN", ""
+)
+
 DATABRICKS_EMBEDDING_ENDPOINT = os.getenv(
     "DATABRICKS_EMBEDDING_ENDPOINT", ""
 )
 
-CHUNK_WORDS = int(os.getenv("CHUNK_WORDS", "180"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "35"))
+CHROMA_FOLDER = os.getenv(
+    "CHROMA_FOLDER", "./confluence_chroma"
+)
+
+CHROMA_COLLECTION = os.getenv(
+    "CHROMA_COLLECTION", "confluence_onboarding"
+)
+
+CHUNK_WORDS = int(
+    os.getenv("CHUNK_WORDS", "180")
+)
+
+CHUNK_OVERLAP = int(
+    os.getenv("CHUNK_OVERLAP", "35")
+)
+
 EMBEDDING_BATCH_SIZE = int(
     os.getenv("EMBEDDING_BATCH_SIZE", "32")
 )
+
 REQUEST_TIMEOUT = 45
 
 
 # ---------------------------------------------------------
-# Validate configuration
+# Check configuration
 # ---------------------------------------------------------
 
 def check_settings():
-    """Check the configuration before starting."""
+    """Check that the required settings are available."""
 
     required_settings = {
         "CONFLUENCE_URL": CONFLUENCE_URL,
         "CONFLUENCE_EMAIL": CONFLUENCE_EMAIL,
         "CONFLUENCE_API_TOKEN": CONFLUENCE_API_TOKEN,
         "CONFLUENCE_SPACE_KEY": CONFLUENCE_SPACE_KEY,
+        "DATABRICKS_HOST": DATABRICKS_HOST,
+        "DATABRICKS_TOKEN": DATABRICKS_TOKEN,
+        "DATABRICKS_EMBEDDING_ENDPOINT":
+            DATABRICKS_EMBEDDING_ENDPOINT,
     }
 
     missing_settings = [
-        name for name, value in required_settings.items()
+        name
+        for name, value in required_settings.items()
         if not value
     ]
 
     if missing_settings:
         raise ValueError(
-            "Missing settings in .env: "
+            "Please configure these settings in .env: "
             + ", ".join(missing_settings)
         )
 
     if CHUNK_WORDS <= 0:
-        raise ValueError("CHUNK_WORDS must be positive.")
+        raise ValueError("CHUNK_WORDS must be greater than zero.")
 
     if not 0 <= CHUNK_OVERLAP < CHUNK_WORDS:
         raise ValueError(
@@ -88,23 +122,7 @@ def check_settings():
 
     if EMBEDDING_BATCH_SIZE <= 0:
         raise ValueError(
-            "EMBEDDING_BATCH_SIZE must be positive."
-        )
-
-    if EMBEDDING_PROVIDER == "databricks":
-        if not all([
-            DATABRICKS_HOST,
-            DATABRICKS_TOKEN,
-            DATABRICKS_EMBEDDING_ENDPOINT,
-        ]):
-            raise ValueError(
-                "Set DATABRICKS_HOST, DATABRICKS_TOKEN, "
-                "and DATABRICKS_EMBEDDING_ENDPOINT."
-            )
-
-    elif EMBEDDING_PROVIDER != "fastembed":
-        raise ValueError(
-            "EMBEDDING_PROVIDER must be fastembed or databricks."
+            "EMBEDDING_BATCH_SIZE must be greater than zero."
         )
 
 
@@ -113,7 +131,7 @@ def check_settings():
 # ---------------------------------------------------------
 
 def create_confluence_session():
-    """Create an authenticated Confluence session."""
+    """Create a session for reading Confluence pages."""
 
     confluence_session = requests.Session()
 
@@ -130,15 +148,15 @@ def create_confluence_session():
 
 
 def get_confluence_pages(confluence_session):
-    """Retrieve all current pages in the selected space."""
-
-    pages = []
-    start_at = 0
-    page_size = 100
+    """Read all current pages in the configured space."""
 
     api_url = (
         f"{CONFLUENCE_URL}/wiki/rest/api/content"
     )
+
+    all_pages = []
+    start_at = 0
+    page_size = 100
 
     while True:
         params = {
@@ -155,15 +173,16 @@ def get_confluence_pages(confluence_session):
             params=params,
             timeout=REQUEST_TIMEOUT,
         )
+
         response.raise_for_status()
 
         page_data = response.json()
         current_pages = page_data.get("results", [])
 
-        pages.extend(current_pages)
+        all_pages.extend(current_pages)
 
         print(
-            f"Retrieved {len(pages)} Confluence pages..."
+            f"Retrieved {len(all_pages)} pages so far."
         )
 
         if len(current_pages) < page_size:
@@ -171,50 +190,80 @@ def get_confluence_pages(confluence_session):
 
         start_at += len(current_pages)
 
-    return pages
+    return all_pages
 
 
 # ---------------------------------------------------------
-# Clean and prepare page content
+# Clean page content
 # ---------------------------------------------------------
 
 def clean_page_content(page_html):
-    """Convert HTML into readable text."""
+    """
+    Convert HTML to readable text.
 
-    soup = BeautifulSoup(
-        page_html or "", "html.parser"
-    )
+    Ignore empty content, extra spaces, repeated line breaks,
+    and content that contains only whitespace.
+    """
 
+    if not page_html or not page_html.strip():
+        return ""
+
+    soup = BeautifulSoup(page_html, "html.parser")
+
+    # Remove elements that should not be included in the text.
     for tag in soup([
-        "script", "style", "noscript"
+        "script",
+        "style",
+        "noscript",
+        "svg",
     ]):
         tag.decompose()
 
+    # Keep separate paragraphs, headings, list items, and rows
+    # so the resulting text remains easier to understand.
     for tag in soup.find_all([
-        "p", "br", "div", "li",
-        "tr", "h1", "h2", "h3", "h4"
+        "p",
+        "div",
+        "li",
+        "tr",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "br",
     ]):
-        tag.insert_after("\n")
+        tag.append("\n")
 
-    page_text = soup.get_text(
-        separator=" ", strip=True
-    )
+    page_text = soup.get_text(separator=" ", strip=True)
 
-    page_text = re.sub(r"[ \t]+", " ", page_text)
+    # Normalize whitespace without changing the actual words.
+    page_text = re.sub(r"[ \t\r\f\v]+", " ", page_text)
     page_text = re.sub(r"\s*\n\s*", "\n", page_text)
     page_text = re.sub(r"\n{2,}", "\n", page_text)
 
-    return page_text.strip()
+    # Remove blank lines and whitespace-only content.
+    useful_lines = [
+        line.strip()
+        for line in page_text.splitlines()
+        if line.strip()
+    ]
 
+    return "\n".join(useful_lines).strip()
+
+
+# ---------------------------------------------------------
+# Prepare page information
+# ---------------------------------------------------------
 
 def get_page_url(page):
-    """Return a link to the Confluence page."""
+    """Build the link a user can open to view a page."""
 
     web_link = page.get("_links", {}).get("webui")
 
     if web_link:
         if web_link.startswith("http"):
             return web_link
+
         return f"{CONFLUENCE_URL}{web_link}"
 
     return (
@@ -224,16 +273,16 @@ def get_page_url(page):
 
 
 def prepare_page_record(page):
-    """Extract the useful fields from a Confluence page."""
+    """Extract the title, content, version, and URL."""
 
     page_id = str(page["id"])
 
-    page_title = page.get(
-        "title", "Untitled page"
-    )
+    page_title = (
+        page.get("title") or "Untitled page"
+    ).strip()
 
-    page_version = page.get(
-        "version", {}
+    page_version = (
+        page.get("version") or {}
     ).get("number", 0)
 
     page_html = (
@@ -243,6 +292,10 @@ def prepare_page_record(page):
     )
 
     page_text = clean_page_content(page_html)
+
+    # Ignore pages that contain no useful text.
+    if not page_text:
+        return None
 
     content_hash = hashlib.sha256(
         page_text.encode("utf-8")
@@ -259,7 +312,7 @@ def prepare_page_record(page):
 
 
 # ---------------------------------------------------------
-# Split pages into chunks
+# Split content into chunks
 # ---------------------------------------------------------
 
 def split_text_into_chunks(
@@ -267,7 +320,7 @@ def split_text_into_chunks(
     chunk_words=CHUNK_WORDS,
     overlap_words=CHUNK_OVERLAP,
 ):
-    """Split page text into overlapping chunks."""
+    """Split useful text into overlapping chunks."""
 
     words = page_text.split()
 
@@ -282,6 +335,7 @@ def split_text_into_chunks(
             words[start:start + chunk_words]
         ).strip()
 
+        # Do not store empty or whitespace-only chunks.
         if chunk:
             chunks.append(chunk)
 
@@ -292,14 +346,11 @@ def split_text_into_chunks(
 
 
 def prepare_document_chunks(page_records):
-    """Prepare chunk text, unique IDs, and page metadata."""
+    """Turn pages into chunks that can be stored in ChromaDB."""
 
     all_chunks = []
 
     for page in page_records:
-        if not page["content"]:
-            continue
-
         page_chunks = split_text_into_chunks(
             page["content"]
         )
@@ -330,63 +381,30 @@ def prepare_document_chunks(page_records):
 
 
 # ---------------------------------------------------------
-# Generate embeddings
+# Create embeddings through Databricks
 # ---------------------------------------------------------
 
-class EmbeddingService:
-    """Create embeddings locally or through Databricks."""
+class DatabricksEmbeddingService:
+    """Generate embeddings using a Databricks serving endpoint."""
 
     def __init__(self):
-        self.local_model = None
-        self.databricks_session = None
+        self.session = requests.Session()
 
-        if EMBEDDING_PROVIDER == "fastembed":
-            try:
-                from fastembed import TextEmbedding
-            except ImportError as error:
-                raise RuntimeError(
-                    "FastEmbed is missing. Run "
-                    "'pip install fastembed'."
-                ) from error
+        self.session.headers.update({
+            "Authorization": f"Bearer {DATABRICKS_TOKEN}",
+            "Content-Type": "application/json",
+        })
 
-            self.local_model = TextEmbedding(
-                model_name=FASTEMBED_MODEL
-            )
-
-        else:
-            self.databricks_session = requests.Session()
-
-            self.databricks_session.headers.update({
-                "Authorization": (
-                    f"Bearer {DATABRICKS_TOKEN}"
-                ),
-                "Content-Type": "application/json",
-            })
-
-    def create_embeddings(self, texts):
-        """Return an embedding vector for each text."""
-
-        if not texts:
-            return []
-
-        if EMBEDDING_PROVIDER == "fastembed":
-            return [
-                vector.tolist()
-                for vector in self.local_model.embed(texts)
-            ]
-
-        return self.create_databricks_embeddings(texts)
-
-    def create_databricks_embeddings(self, texts):
-        """
-        Call a Databricks endpoint using an
-        OpenAI-compatible embeddings request.
-        """
-
-        endpoint_url = (
+        self.endpoint_url = (
             f"{DATABRICKS_HOST}/serving-endpoints/"
             f"{DATABRICKS_EMBEDDING_ENDPOINT}/invocations"
         )
+
+    def create_embeddings(self, texts):
+        """Return one embedding vector for every input text."""
+
+        if not texts:
+            return []
 
         all_vectors = []
 
@@ -398,23 +416,24 @@ class EmbeddingService:
                 batch_start + EMBEDDING_BATCH_SIZE
             ]
 
-            response = self.databricks_session.post(
-                endpoint_url,
+            response = self.session.post(
+                self.endpoint_url,
                 json={"input": text_batch},
                 timeout=REQUEST_TIMEOUT,
             )
 
             response.raise_for_status()
+
             response_data = response.json()
 
-            if isinstance(
-                response_data.get("data"), list
-            ):
+            # Support the OpenAI-compatible embedding response.
+            if isinstance(response_data.get("data"), list):
                 batch_vectors = [
                     item["embedding"]
                     for item in response_data["data"]
                 ]
 
+            # Also support endpoints returning an embeddings array.
             elif isinstance(
                 response_data.get("embeddings"), list
             ):
@@ -422,15 +441,31 @@ class EmbeddingService:
 
             else:
                 raise ValueError(
-                    "Unsupported Databricks response format. "
-                    "Expected data[].embedding or embeddings. "
-                    "Check your model endpoint's API format."
+                    "The Databricks response format was not "
+                    "recognized. Check the endpoint's API format."
                 )
 
             if len(batch_vectors) != len(text_batch):
                 raise ValueError(
-                    "The number of returned embeddings "
-                    "does not match the number of input texts."
+                    "The endpoint returned a different number "
+                    "of vectors than the number of input texts."
+                )
+
+            if any(
+                not isinstance(vector, list) or not vector
+                for vector in batch_vectors
+            ):
+                raise ValueError(
+                    "The endpoint returned an empty or invalid vector."
+                )
+
+            vector_sizes = {
+                len(vector) for vector in batch_vectors
+            }
+
+            if len(vector_sizes) != 1:
+                raise ValueError(
+                    "The embedding vectors have inconsistent dimensions."
                 )
 
             all_vectors.extend(batch_vectors)
@@ -439,11 +474,11 @@ class EmbeddingService:
 
 
 # ---------------------------------------------------------
-# Open the local vector database
+# Open the local ChromaDB collection
 # ---------------------------------------------------------
 
 def open_document_collection():
-    """Open the persistent ChromaDB collection."""
+    """Open the persistent local vector database."""
 
     chroma_client = chromadb.PersistentClient(
         path=CHROMA_FOLDER
@@ -452,8 +487,7 @@ def open_document_collection():
     collection = chroma_client.get_or_create_collection(
         name=CHROMA_COLLECTION,
         metadata={
-            "description":
-                "Confluence onboarding documentation"
+            "description": "Confluence documentation chunks"
         },
     )
 
@@ -461,11 +495,14 @@ def open_document_collection():
 
 
 # ---------------------------------------------------------
-# Index Confluence pages
+# Refresh the Confluence search index
 # ---------------------------------------------------------
 
 def sync_confluence_pages():
-    """Fetch pages and refresh the local search index."""
+    """
+    Fetch the current pages, create embeddings, and refresh
+    the local index after the new embeddings are ready.
+    """
 
     check_settings()
 
@@ -477,51 +514,31 @@ def sync_confluence_pages():
         confluence_session
     )
 
-    print(f"\nPages retrieved: {len(raw_pages)}")
+    print(f"\nTotal pages retrieved: {len(raw_pages)}")
 
-    page_records = [
-        prepare_page_record(page)
-        for page in raw_pages
-    ]
+    page_records = []
+    skipped_pages = 0
 
-    page_records = [
-        page for page in page_records
-        if page["content"]
-    ]
+    for page in raw_pages:
+        page_record = prepare_page_record(page)
+
+        if page_record is None:
+            skipped_pages += 1
+            continue
+
+        page_records.append(page_record)
+
+    print(f"Pages with useful text: {len(page_records)}")
+    print(f"Empty pages skipped: {skipped_pages}")
 
     chunks = prepare_document_chunks(page_records)
 
     print(f"Chunks prepared: {len(chunks)}")
 
-    _, collection = open_document_collection()
-
-    # Capture the old page IDs before replacing the index.
-    old_page_ids = set()
-
-    existing_count = collection.count()
-
-    if existing_count:
-        existing_records = collection.get(
-            include=["metadatas"]
-        )
-
-        for metadata in (
-            existing_records.get("metadatas") or []
-        ):
-            if metadata and metadata.get("page_id"):
-                old_page_ids.add(
-                    str(metadata["page_id"])
-                )
-
-    # Remove the previous indexed chunks so updated pages
-    # cannot leave obsolete content behind.
-    for page_id in old_page_ids:
-        collection.delete(
-            where={"page_id": page_id}
-        )
-
-    # Replace the collection contents using the current pages.
-    embedder = EmbeddingService()
+    # Prepare the new vectors before deleting the old index.
+    # This avoids clearing the current index if embedding fails.
+    embedder = DatabricksEmbeddingService()
+    indexed_batches = []
 
     for batch_start in range(
         0, len(chunks), EMBEDDING_BATCH_SIZE
@@ -535,42 +552,81 @@ def sync_confluence_pages():
             chunk["text"] for chunk in chunk_batch
         ]
 
-        vectors = embedder.create_embeddings(
-            chunk_texts
+        vectors = embedder.create_embeddings(chunk_texts)
+
+        indexed_batches.append({
+            "chunks": chunk_batch,
+            "vectors": vectors,
+        })
+
+        print(
+            f"Prepared embeddings for "
+            f"{min(batch_start + len(chunk_batch), len(chunks))}"
+            f" of {len(chunks)} chunks."
         )
+
+    # Confirm all new vectors have the same dimensions.
+    vector_dimensions = {
+        len(vector)
+        for batch in indexed_batches
+        for vector in batch["vectors"]
+    }
+
+    if len(vector_dimensions) > 1:
+        raise ValueError(
+            "The embedding endpoint returned inconsistent "
+            "vector dimensions across batches."
+        )
+
+    _, collection = open_document_collection()
+
+    # Save the new index after embedding creation succeeds.
+    # Delete existing records in batches to handle large indexes.
+    existing_count = collection.count()
+
+    while existing_count:
+        existing_records = collection.get(
+            limit=min(existing_count, 5000),
+            include=[],
+        )
+
+        old_ids = existing_records.get("ids", [])
+
+        if not old_ids:
+            break
+
+        collection.delete(ids=old_ids)
+        existing_count = collection.count()
+
+    # Add the freshly indexed chunks.
+    for batch in indexed_batches:
+        chunk_batch = batch["chunks"]
+        vectors = batch["vectors"]
 
         collection.upsert(
             ids=[
                 chunk["id"] for chunk in chunk_batch
             ],
-            documents=chunk_texts,
+            documents=[
+                chunk["text"] for chunk in chunk_batch
+            ],
             embeddings=vectors,
             metadatas=[
-                chunk["metadata"]
-                for chunk in chunk_batch
+                chunk["metadata"] for chunk in chunk_batch
             ],
         )
 
-        print(
-            f"Indexed {min(batch_start + len(chunk_batch), len(chunks))}"
-            f" of {len(chunks)} chunks"
-        )
-
-    print(
-        "\nIndex refresh completed. "
-        f"Total stored chunks: {collection.count()}"
-    )
+    print("\nConfluence indexing completed.")
+    print(f"Pages indexed: {len(page_records)}")
+    print(f"Chunks stored: {collection.count()}")
 
 
 # ---------------------------------------------------------
-# Retrieve relevant Confluence content
+# Search for relevant documentation
 # ---------------------------------------------------------
 
-def search_relevant_pages(
-    question,
-    number_of_results=5,
-):
-    """Find the document chunks most relevant to a question."""
+def search_relevant_pages(question, number_of_results=5):
+    """Find the Confluence chunks most relevant to a question."""
 
     check_settings()
 
@@ -581,21 +637,39 @@ def search_relevant_pages(
     if total_chunks == 0:
         print(
             "The search index is empty. "
-            "Run the script with --sync first."
+            "Run python confluence_rag.py --sync first."
         )
         return []
 
-    embedder = EmbeddingService()
+    embedder = DatabricksEmbeddingService()
 
     question_vector = embedder.create_embeddings(
         [question]
     )[0]
 
-    search_results = collection.query(
+    # Make sure the question uses the same vector dimensions
+    # as the documents already stored in the collection.
+    stored_record = collection.get(
+        limit=1,
+        include=["embeddings"],
+    )
+
+    stored_embeddings = stored_record.get("embeddings")
+
+    if (
+        stored_embeddings is not None
+        and len(stored_embeddings) > 0
+        and len(question_vector) != len(stored_embeddings[0])
+    ):
+        raise ValueError(
+            "The question embedding dimensions do not match "
+            "the stored document embeddings. Re-index using "
+            "the same Databricks embedding model."
+        )
+
+    results = collection.query(
         query_embeddings=[question_vector],
-        n_results=min(
-            number_of_results, total_chunks
-        ),
+        n_results=min(number_of_results, total_chunks),
         include=[
             "documents",
             "metadatas",
@@ -605,17 +679,9 @@ def search_relevant_pages(
 
     matched_pages = []
 
-    documents = (
-        search_results.get("documents") or [[]]
-    )[0]
-
-    metadata_rows = (
-        search_results.get("metadatas") or [[]]
-    )[0]
-
-    distances = (
-        search_results.get("distances") or [[]]
-    )[0]
+    documents = (results.get("documents") or [[]])[0]
+    metadata_rows = (results.get("metadatas") or [[]])[0]
+    distances = (results.get("distances") or [[]])[0]
 
     for index, document_text in enumerate(documents):
         matched_pages.append({
@@ -632,70 +698,64 @@ def search_relevant_pages(
 
 
 # ---------------------------------------------------------
-# Display the search results
+# Display the retrieved content
 # ---------------------------------------------------------
 
-def show_search_results(
-    question,
-    number_of_results=5,
-):
-    """Print matching pages and their relevant text."""
+def show_search_results(question, number_of_results=5):
+    """Print the matching documentation in a readable format."""
 
-    matched_pages = search_relevant_pages(
+    matches = search_relevant_pages(
         question,
         number_of_results,
     )
 
-    if not matched_pages:
+    if not matches:
+        print(
+            "I couldn't find this information in the "
+            "Confluence documentation."
+        )
         return
 
     print(f"\nQuestion: {question}")
-    print("\nRelevant Confluence documentation")
+    print("\nRelevant Confluence documentation:")
 
-    for result_number, result in enumerate(
-        matched_pages, start=1
-    ):
-        metadata = result["metadata"]
+    for result_number, match in enumerate(matches, start=1):
+        metadata = match["metadata"]
 
         print("\n" + "=" * 80)
         print(f"Result: {result_number}")
-        print(
-            f"Page title: {metadata.get('title', '')}"
-        )
-        print(f"Page URL: {metadata.get('url', '')}")
-        print(f"Distance: {result['distance']}")
+        print(f"Title: {metadata.get('title', '')}")
+        print(f"URL: {metadata.get('url', '')}")
+        print(f"Distance: {match['distance']}")
         print("-" * 80)
-        print(result["text"])
+        print(match["text"])
 
-    print("\nAnswering rule:")
+    print("\nUse only the retrieved documentation to answer.")
     print(
-        "Use only the retrieved documentation. "
-        "If it does not contain enough evidence, respond:"
-    )
-    print(
-        '"I couldn\'t find this information in the '
-        'Confluence documentation."'
+        "If the evidence does not answer the question, use: "
+        "\"I couldn't find this information in the "
+        "Confluence documentation.\""
     )
 
 
 # ---------------------------------------------------------
-# Command-line entry point
+# Start the program
 # ---------------------------------------------------------
 
 def main():
-    """Run the indexing or search operation."""
+    """Run indexing or search based on the command-line option."""
 
     parser = argparse.ArgumentParser(
         description=(
             "Search Confluence documentation using "
-            "a local ChromaDB RAG index."
+            "Databricks embeddings and local ChromaDB."
         )
     )
 
     parser.add_argument(
         "--sync",
         action="store_true",
-        help="Fetch Confluence pages and refresh the index.",
+        help="Refresh the local Confluence search index.",
     )
 
     parser.add_argument(
@@ -731,31 +791,28 @@ def main():
 
 if __name__ == "__main__":
     main()
-####
+
+
+
+#####
 CONFLUENCE_URL=https://YOUR-COMPANY.atlassian.net
 CONFLUENCE_EMAIL=your-email@company.com
 CONFLUENCE_API_TOKEN=your_confluence_api_token
 CONFLUENCE_SPACE_KEY=YOUR_SPACE_KEY
 
+DATABRICKS_HOST=https://YOUR-WORKSPACE.cloud.databricks.com
+DATABRICKS_TOKEN=your_databricks_token
+DATABRICKS_EMBEDDING_ENDPOINT=your_embedding_endpoint_name
+
 CHROMA_FOLDER=./confluence_chroma
 CHROMA_COLLECTION=confluence_onboarding
-
-# Use fastembed for local embeddings or databricks for hosted embeddings
-EMBEDDING_PROVIDER=fastembed
-
-FASTEMBED_MODEL=BAAI/bge-small-en-v1.5
-
-# Used only when EMBEDDING_PROVIDER=databricks
-DATABRICKS_HOST=
-DATABRICKS_TOKEN=
-DATABRICKS_EMBEDDING_ENDPOINT=
 
 CHUNK_WORDS=180
 CHUNK_OVERLAP=35
 EMBEDDING_BATCH_SIZE=32
 
+
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 chromadb>=0.5.0
 python-dotenv>=1.0.0
-fastembed>=0.3.0
