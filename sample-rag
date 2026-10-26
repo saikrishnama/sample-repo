@@ -731,3 +731,31 @@ def main():
 
 if __name__ == "__main__":
     main()
+####
+CONFLUENCE_URL=https://YOUR-COMPANY.atlassian.net
+CONFLUENCE_EMAIL=your-email@company.com
+CONFLUENCE_API_TOKEN=your_confluence_api_token
+CONFLUENCE_SPACE_KEY=YOUR_SPACE_KEY
+
+CHROMA_FOLDER=./confluence_chroma
+CHROMA_COLLECTION=confluence_onboarding
+
+# Use fastembed for local embeddings or databricks for hosted embeddings
+EMBEDDING_PROVIDER=fastembed
+
+FASTEMBED_MODEL=BAAI/bge-small-en-v1.5
+
+# Used only when EMBEDDING_PROVIDER=databricks
+DATABRICKS_HOST=
+DATABRICKS_TOKEN=
+DATABRICKS_EMBEDDING_ENDPOINT=
+
+CHUNK_WORDS=180
+CHUNK_OVERLAP=35
+EMBEDDING_BATCH_SIZE=32
+
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+chromadb>=0.5.0
+python-dotenv>=1.0.0
+fastembed>=0.3.0
