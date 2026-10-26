@@ -1,0 +1,733 @@
+
+import os
+import re
+import hashlib
+import argparse
+from typing import Any
+
+import requests
+import chromadb
+
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ---------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------
+
+CONFLUENCE_URL = os.getenv("CONFLUENCE_URL", "").rstrip("/")
+CONFLUENCE_EMAIL = os.getenv("CONFLUENCE_EMAIL", "")
+CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN", "")
+CONFLUENCE_SPACE_KEY = os.getenv("CONFLUENCE_SPACE_KEY", "")
+
+CHROMA_FOLDER = os.getenv(
+    "CHROMA_FOLDER", "./confluence_chroma"
+)
+CHROMA_COLLECTION = os.getenv(
+    "CHROMA_COLLECTION", "confluence_onboarding"
+)
+
+EMBEDDING_PROVIDER = os.getenv(
+    "EMBEDDING_PROVIDER", "fastembed"
+).lower()
+
+FASTEMBED_MODEL = os.getenv(
+    "FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5"
+)
+
+DATABRICKS_HOST = os.getenv(
+    "DATABRICKS_HOST", ""
+).rstrip("/")
+DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN", "")
+DATABRICKS_EMBEDDING_ENDPOINT = os.getenv(
+    "DATABRICKS_EMBEDDING_ENDPOINT", ""
+)
+
+CHUNK_WORDS = int(os.getenv("CHUNK_WORDS", "180"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "35"))
+EMBEDDING_BATCH_SIZE = int(
+    os.getenv("EMBEDDING_BATCH_SIZE", "32")
+)
+REQUEST_TIMEOUT = 45
+
+
+# ---------------------------------------------------------
+# Validate configuration
+# ---------------------------------------------------------
+
+def check_settings():
+    """Check the configuration before starting."""
+
+    required_settings = {
+        "CONFLUENCE_URL": CONFLUENCE_URL,
+        "CONFLUENCE_EMAIL": CONFLUENCE_EMAIL,
+        "CONFLUENCE_API_TOKEN": CONFLUENCE_API_TOKEN,
+        "CONFLUENCE_SPACE_KEY": CONFLUENCE_SPACE_KEY,
+    }
+
+    missing_settings = [
+        name for name, value in required_settings.items()
+        if not value
+    ]
+
+    if missing_settings:
+        raise ValueError(
+            "Missing settings in .env: "
+            + ", ".join(missing_settings)
+        )
+
+    if CHUNK_WORDS <= 0:
+        raise ValueError("CHUNK_WORDS must be positive.")
+
+    if not 0 <= CHUNK_OVERLAP < CHUNK_WORDS:
+        raise ValueError(
+            "CHUNK_OVERLAP must be smaller than CHUNK_WORDS."
+        )
+
+    if EMBEDDING_BATCH_SIZE <= 0:
+        raise ValueError(
+            "EMBEDDING_BATCH_SIZE must be positive."
+        )
+
+    if EMBEDDING_PROVIDER == "databricks":
+        if not all([
+            DATABRICKS_HOST,
+            DATABRICKS_TOKEN,
+            DATABRICKS_EMBEDDING_ENDPOINT,
+        ]):
+            raise ValueError(
+                "Set DATABRICKS_HOST, DATABRICKS_TOKEN, "
+                "and DATABRICKS_EMBEDDING_ENDPOINT."
+            )
+
+    elif EMBEDDING_PROVIDER != "fastembed":
+        raise ValueError(
+            "EMBEDDING_PROVIDER must be fastembed or databricks."
+        )
+
+
+# ---------------------------------------------------------
+# Connect to Confluence
+# ---------------------------------------------------------
+
+def create_confluence_session():
+    """Create an authenticated Confluence session."""
+
+    confluence_session = requests.Session()
+
+    confluence_session.auth = (
+        CONFLUENCE_EMAIL,
+        CONFLUENCE_API_TOKEN,
+    )
+
+    confluence_session.headers.update({
+        "Accept": "application/json"
+    })
+
+    return confluence_session
+
+
+def get_confluence_pages(confluence_session):
+    """Retrieve all current pages in the selected space."""
+
+    pages = []
+    start_at = 0
+    page_size = 100
+
+    api_url = (
+        f"{CONFLUENCE_URL}/wiki/rest/api/content"
+    )
+
+    while True:
+        params = {
+            "spaceKey": CONFLUENCE_SPACE_KEY,
+            "type": "page",
+            "status": "current",
+            "limit": page_size,
+            "start": start_at,
+            "expand": "body.storage,version,space",
+        }
+
+        response = confluence_session.get(
+            api_url,
+            params=params,
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+
+        page_data = response.json()
+        current_pages = page_data.get("results", [])
+
+        pages.extend(current_pages)
+
+        print(
+            f"Retrieved {len(pages)} Confluence pages..."
+        )
+
+        if len(current_pages) < page_size:
+            break
+
+        start_at += len(current_pages)
+
+    return pages
+
+
+# ---------------------------------------------------------
+# Clean and prepare page content
+# ---------------------------------------------------------
+
+def clean_page_content(page_html):
+    """Convert HTML into readable text."""
+
+    soup = BeautifulSoup(
+        page_html or "", "html.parser"
+    )
+
+    for tag in soup([
+        "script", "style", "noscript"
+    ]):
+        tag.decompose()
+
+    for tag in soup.find_all([
+        "p", "br", "div", "li",
+        "tr", "h1", "h2", "h3", "h4"
+    ]):
+        tag.insert_after("\n")
+
+    page_text = soup.get_text(
+        separator=" ", strip=True
+    )
+
+    page_text = re.sub(r"[ \t]+", " ", page_text)
+    page_text = re.sub(r"\s*\n\s*", "\n", page_text)
+    page_text = re.sub(r"\n{2,}", "\n", page_text)
+
+    return page_text.strip()
+
+
+def get_page_url(page):
+    """Return a link to the Confluence page."""
+
+    web_link = page.get("_links", {}).get("webui")
+
+    if web_link:
+        if web_link.startswith("http"):
+            return web_link
+        return f"{CONFLUENCE_URL}{web_link}"
+
+    return (
+        f"{CONFLUENCE_URL}/wiki/pages/"
+        f"viewpage.action?pageId={page['id']}"
+    )
+
+
+def prepare_page_record(page):
+    """Extract the useful fields from a Confluence page."""
+
+    page_id = str(page["id"])
+
+    page_title = page.get(
+        "title", "Untitled page"
+    )
+
+    page_version = page.get(
+        "version", {}
+    ).get("number", 0)
+
+    page_html = (
+        page.get("body", {})
+        .get("storage", {})
+        .get("value", "")
+    )
+
+    page_text = clean_page_content(page_html)
+
+    content_hash = hashlib.sha256(
+        page_text.encode("utf-8")
+    ).hexdigest()
+
+    return {
+        "page_id": page_id,
+        "title": page_title,
+        "version": page_version,
+        "url": get_page_url(page),
+        "content": page_text,
+        "content_hash": content_hash,
+    }
+
+
+# ---------------------------------------------------------
+# Split pages into chunks
+# ---------------------------------------------------------
+
+def split_text_into_chunks(
+    page_text,
+    chunk_words=CHUNK_WORDS,
+    overlap_words=CHUNK_OVERLAP,
+):
+    """Split page text into overlapping chunks."""
+
+    words = page_text.split()
+
+    if not words:
+        return []
+
+    step_size = chunk_words - overlap_words
+    chunks = []
+
+    for start in range(0, len(words), step_size):
+        chunk = " ".join(
+            words[start:start + chunk_words]
+        ).strip()
+
+        if chunk:
+            chunks.append(chunk)
+
+        if start + chunk_words >= len(words):
+            break
+
+    return chunks
+
+
+def prepare_document_chunks(page_records):
+    """Prepare chunk text, unique IDs, and page metadata."""
+
+    all_chunks = []
+
+    for page in page_records:
+        if not page["content"]:
+            continue
+
+        page_chunks = split_text_into_chunks(
+            page["content"]
+        )
+
+        for chunk_number, chunk_text in enumerate(
+            page_chunks
+        ):
+            chunk_id = (
+                f"{page['page_id']}_"
+                f"{page['content_hash'][:12]}_"
+                f"{chunk_number}"
+            )
+
+            all_chunks.append({
+                "id": chunk_id,
+                "text": chunk_text,
+                "metadata": {
+                    "page_id": page["page_id"],
+                    "title": page["title"],
+                    "version": str(page["version"]),
+                    "url": page["url"],
+                    "chunk_number": chunk_number,
+                    "content_hash": page["content_hash"],
+                },
+            })
+
+    return all_chunks
+
+
+# ---------------------------------------------------------
+# Generate embeddings
+# ---------------------------------------------------------
+
+class EmbeddingService:
+    """Create embeddings locally or through Databricks."""
+
+    def __init__(self):
+        self.local_model = None
+        self.databricks_session = None
+
+        if EMBEDDING_PROVIDER == "fastembed":
+            try:
+                from fastembed import TextEmbedding
+            except ImportError as error:
+                raise RuntimeError(
+                    "FastEmbed is missing. Run "
+                    "'pip install fastembed'."
+                ) from error
+
+            self.local_model = TextEmbedding(
+                model_name=FASTEMBED_MODEL
+            )
+
+        else:
+            self.databricks_session = requests.Session()
+
+            self.databricks_session.headers.update({
+                "Authorization": (
+                    f"Bearer {DATABRICKS_TOKEN}"
+                ),
+                "Content-Type": "application/json",
+            })
+
+    def create_embeddings(self, texts):
+        """Return an embedding vector for each text."""
+
+        if not texts:
+            return []
+
+        if EMBEDDING_PROVIDER == "fastembed":
+            return [
+                vector.tolist()
+                for vector in self.local_model.embed(texts)
+            ]
+
+        return self.create_databricks_embeddings(texts)
+
+    def create_databricks_embeddings(self, texts):
+        """
+        Call a Databricks endpoint using an
+        OpenAI-compatible embeddings request.
+        """
+
+        endpoint_url = (
+            f"{DATABRICKS_HOST}/serving-endpoints/"
+            f"{DATABRICKS_EMBEDDING_ENDPOINT}/invocations"
+        )
+
+        all_vectors = []
+
+        for batch_start in range(
+            0, len(texts), EMBEDDING_BATCH_SIZE
+        ):
+            text_batch = texts[
+                batch_start:
+                batch_start + EMBEDDING_BATCH_SIZE
+            ]
+
+            response = self.databricks_session.post(
+                endpoint_url,
+                json={"input": text_batch},
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            response.raise_for_status()
+            response_data = response.json()
+
+            if isinstance(
+                response_data.get("data"), list
+            ):
+                batch_vectors = [
+                    item["embedding"]
+                    for item in response_data["data"]
+                ]
+
+            elif isinstance(
+                response_data.get("embeddings"), list
+            ):
+                batch_vectors = response_data["embeddings"]
+
+            else:
+                raise ValueError(
+                    "Unsupported Databricks response format. "
+                    "Expected data[].embedding or embeddings. "
+                    "Check your model endpoint's API format."
+                )
+
+            if len(batch_vectors) != len(text_batch):
+                raise ValueError(
+                    "The number of returned embeddings "
+                    "does not match the number of input texts."
+                )
+
+            all_vectors.extend(batch_vectors)
+
+        return all_vectors
+
+
+# ---------------------------------------------------------
+# Open the local vector database
+# ---------------------------------------------------------
+
+def open_document_collection():
+    """Open the persistent ChromaDB collection."""
+
+    chroma_client = chromadb.PersistentClient(
+        path=CHROMA_FOLDER
+    )
+
+    collection = chroma_client.get_or_create_collection(
+        name=CHROMA_COLLECTION,
+        metadata={
+            "description":
+                "Confluence onboarding documentation"
+        },
+    )
+
+    return chroma_client, collection
+
+
+# ---------------------------------------------------------
+# Index Confluence pages
+# ---------------------------------------------------------
+
+def sync_confluence_pages():
+    """Fetch pages and refresh the local search index."""
+
+    check_settings()
+
+    confluence_session = create_confluence_session()
+
+    print("\nReading pages from Confluence...")
+
+    raw_pages = get_confluence_pages(
+        confluence_session
+    )
+
+    print(f"\nPages retrieved: {len(raw_pages)}")
+
+    page_records = [
+        prepare_page_record(page)
+        for page in raw_pages
+    ]
+
+    page_records = [
+        page for page in page_records
+        if page["content"]
+    ]
+
+    chunks = prepare_document_chunks(page_records)
+
+    print(f"Chunks prepared: {len(chunks)}")
+
+    _, collection = open_document_collection()
+
+    # Capture the old page IDs before replacing the index.
+    old_page_ids = set()
+
+    existing_count = collection.count()
+
+    if existing_count:
+        existing_records = collection.get(
+            include=["metadatas"]
+        )
+
+        for metadata in (
+            existing_records.get("metadatas") or []
+        ):
+            if metadata and metadata.get("page_id"):
+                old_page_ids.add(
+                    str(metadata["page_id"])
+                )
+
+    # Remove the previous indexed chunks so updated pages
+    # cannot leave obsolete content behind.
+    for page_id in old_page_ids:
+        collection.delete(
+            where={"page_id": page_id}
+        )
+
+    # Replace the collection contents using the current pages.
+    embedder = EmbeddingService()
+
+    for batch_start in range(
+        0, len(chunks), EMBEDDING_BATCH_SIZE
+    ):
+        chunk_batch = chunks[
+            batch_start:
+            batch_start + EMBEDDING_BATCH_SIZE
+        ]
+
+        chunk_texts = [
+            chunk["text"] for chunk in chunk_batch
+        ]
+
+        vectors = embedder.create_embeddings(
+            chunk_texts
+        )
+
+        collection.upsert(
+            ids=[
+                chunk["id"] for chunk in chunk_batch
+            ],
+            documents=chunk_texts,
+            embeddings=vectors,
+            metadatas=[
+                chunk["metadata"]
+                for chunk in chunk_batch
+            ],
+        )
+
+        print(
+            f"Indexed {min(batch_start + len(chunk_batch), len(chunks))}"
+            f" of {len(chunks)} chunks"
+        )
+
+    print(
+        "\nIndex refresh completed. "
+        f"Total stored chunks: {collection.count()}"
+    )
+
+
+# ---------------------------------------------------------
+# Retrieve relevant Confluence content
+# ---------------------------------------------------------
+
+def search_relevant_pages(
+    question,
+    number_of_results=5,
+):
+    """Find the document chunks most relevant to a question."""
+
+    check_settings()
+
+    _, collection = open_document_collection()
+
+    total_chunks = collection.count()
+
+    if total_chunks == 0:
+        print(
+            "The search index is empty. "
+            "Run the script with --sync first."
+        )
+        return []
+
+    embedder = EmbeddingService()
+
+    question_vector = embedder.create_embeddings(
+        [question]
+    )[0]
+
+    search_results = collection.query(
+        query_embeddings=[question_vector],
+        n_results=min(
+            number_of_results, total_chunks
+        ),
+        include=[
+            "documents",
+            "metadatas",
+            "distances",
+        ],
+    )
+
+    matched_pages = []
+
+    documents = (
+        search_results.get("documents") or [[]]
+    )[0]
+
+    metadata_rows = (
+        search_results.get("metadatas") or [[]]
+    )[0]
+
+    distances = (
+        search_results.get("distances") or [[]]
+    )[0]
+
+    for index, document_text in enumerate(documents):
+        matched_pages.append({
+            "text": document_text,
+            "metadata": metadata_rows[index],
+            "distance": (
+                distances[index]
+                if index < len(distances)
+                else None
+            ),
+        })
+
+    return matched_pages
+
+
+# ---------------------------------------------------------
+# Display the search results
+# ---------------------------------------------------------
+
+def show_search_results(
+    question,
+    number_of_results=5,
+):
+    """Print matching pages and their relevant text."""
+
+    matched_pages = search_relevant_pages(
+        question,
+        number_of_results,
+    )
+
+    if not matched_pages:
+        return
+
+    print(f"\nQuestion: {question}")
+    print("\nRelevant Confluence documentation")
+
+    for result_number, result in enumerate(
+        matched_pages, start=1
+    ):
+        metadata = result["metadata"]
+
+        print("\n" + "=" * 80)
+        print(f"Result: {result_number}")
+        print(
+            f"Page title: {metadata.get('title', '')}"
+        )
+        print(f"Page URL: {metadata.get('url', '')}")
+        print(f"Distance: {result['distance']}")
+        print("-" * 80)
+        print(result["text"])
+
+    print("\nAnswering rule:")
+    print(
+        "Use only the retrieved documentation. "
+        "If it does not contain enough evidence, respond:"
+    )
+    print(
+        '"I couldn\'t find this information in the '
+        'Confluence documentation."'
+    )
+
+
+# ---------------------------------------------------------
+# Command-line entry point
+# ---------------------------------------------------------
+
+def main():
+    """Run the indexing or search operation."""
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Search Confluence documentation using "
+            "a local ChromaDB RAG index."
+        )
+    )
+
+    parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="Fetch Confluence pages and refresh the index.",
+    )
+
+    parser.add_argument(
+        "--ask",
+        type=str,
+        help="Search the index with a question.",
+    )
+
+    parser.add_argument(
+        "--results",
+        type=int,
+        default=5,
+        help="Number of matching chunks to retrieve.",
+    )
+
+    args = parser.parse_args()
+
+    if args.results < 1:
+        parser.error("--results must be at least 1.")
+
+    if args.sync:
+        sync_confluence_pages()
+
+    elif args.ask:
+        show_search_results(
+            args.ask,
+            args.results,
+        )
+
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
