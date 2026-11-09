@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS embeddings (
+    chunk_id STRING NOT NULL,
+    page_id STRING NOT NULL,
+    page_title STRING,
+    space_key STRING,
+    page_url STRING,
+    chunk_text STRING,
+    embedding ARRAY<FLOAT>,
+    embedding_model STRING,
+    embedding_dimension INT,
+    chunk_hash STRING,
+    embedded_at TIMESTAMP,
+    is_active BOOLEAN,
+    is_wip BOOLEAN,
+    is_deleted BOOLEAN,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA
+TBLPROPERTIES (
+    'delta.enableChangeDataFeed' = 'true'
+);
